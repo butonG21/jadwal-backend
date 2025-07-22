@@ -6,7 +6,7 @@ interface IJadwal {
 }
 
 export interface ISchedule extends Document {
-  employee_id: string;
+  employee_id?: string;
   name: string;
   department: string;
   position: string;
@@ -14,7 +14,7 @@ export interface ISchedule extends Document {
 }
 
 const ScheduleSchema: Schema = new Schema({
-  employee_id: { type: String, required: true },
+  employee_id: { type: String, required: false }, // Ubah dari required: true
   name: { type: String, required: true },
   department: { type: String, required: true },
   position: { type: String, required: true },

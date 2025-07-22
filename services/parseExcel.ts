@@ -20,11 +20,6 @@ export function parseScheduleFromExcel(buffer: Buffer): ParsedSchedule[] {
     const now = new Date();
     const currentMonth = now.getMonth() + 1;
     const currentYear = now.getFullYear();
-
-    const bulanMap = [
-        '', 'januari', 'februari', 'maret', 'april', 'mei', 'juni',
-        'juli', 'agustus', 'september', 'oktober', 'november', 'desember'
-    ];
     const currentMonthName = bulanMap[currentMonth];
 
     for (const sheetName of workbook.SheetNames) {
@@ -32,10 +27,9 @@ export function parseScheduleFromExcel(buffer: Buffer): ParsedSchedule[] {
         const data = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1 });
         if (!data[2]) continue;
 
-        const barisBulan = data[1]; // Baris yang mengandung nama bulan (biasanya baris 2)
+        const barisBulan = data[1];
         const headerRow = data[2];
 
-        // Cari indeks awal kolom untuk bulan saat ini
         let mulaiIndex = -1;
         for (let i = 0; i < barisBulan.length; i++) {
             const cell = (barisBulan[i] || '').toLowerCase().replace(/\s+/g, '');
@@ -50,7 +44,6 @@ export function parseScheduleFromExcel(buffer: Buffer): ParsedSchedule[] {
             continue;
         }
 
-        // Ambil maksimum 31 kolom ke depan dari kolom bulan yang ditemukan
         const tanggalKolomIndex: { tgl: number; kolomIndex: number }[] = [];
         for (let offset = 0; offset < 31; offset++) {
             const colIndex = mulaiIndex + offset;
@@ -61,15 +54,19 @@ export function parseScheduleFromExcel(buffer: Buffer): ParsedSchedule[] {
             }
         }
 
-        // Proses baris-baris karyawan
         for (let i = 3; i < data.length; i++) {
             const row = data[i];
-            const id = row[1];
+            let id = row[1];
             const nama = row[2];
             const posisi = row[3];
             const department = 'Unknown';
 
-            if (!id || !nama || nama === 'NAMA LENGKAP') continue;
+            if (!nama || nama.toLowerCase() === 'nama lengkap') continue;
+
+            // Jika ID kosong, gunakan nilai default sementara
+            if (!id || String(id).trim() === '') {
+                id = `unknown-${i}`; // Buat ID unik sementara berdasarkan baris
+            }
 
             const jadwal = [];
 
@@ -81,7 +78,6 @@ export function parseScheduleFromExcel(buffer: Buffer): ParsedSchedule[] {
                 }
             }
 
-            // Jangan simpan jika tidak ada shift valid
             if (jadwal.length > 0) {
                 hasil.push({
                     employee_id: String(id),
