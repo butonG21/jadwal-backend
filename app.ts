@@ -3,6 +3,9 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import scheduleRoutes from './routes/scheduleRoutes';
+import authRoutes from './routes/authRoutes';
+import userRoutes from './routes/userRoute';
+
 
 dotenv.config();
 
@@ -12,6 +15,9 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 app.use('/api/schedule', scheduleRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
+
 
 console.log('🚧 Connecting to MongoDB...');
 mongoose.connect(process.env.MONGO_URI!)
