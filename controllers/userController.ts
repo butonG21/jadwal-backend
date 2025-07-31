@@ -5,35 +5,37 @@ import { AuthenticatedRequest } from '../middlewares/verifyToken';
 export const getProfile = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const user = req.user;
-
-    console.log('🔍 Mencari data profil dan jadwal untuk user:');
-    console.log('👉 UID:', user.uid);
-    console.log('👉 Name:', user.name);
-
-    // Normalisasi nama ke lowercase
     const userNameLower = user.name?.toLowerCase();
 
-    // Cari berdasarkan employee_id atau nama (case insensitive)
-    const scheduleDoc = await Schedule.findOne({
+    // Ambil SEMUA dokumen Schedule milik user (Juli, Agustus, dst)
+    const scheduleDocs = await Schedule.find({
       $or: [
         { employee_id: user.uid },
-        { name: new RegExp(`^${userNameLower}$`, 'i') } // regex insensitive
+        { name: new RegExp(`^${userNameLower}$`, 'i') }
       ]
     });
 
-    if (scheduleDoc) {
-      console.log('✅ Jadwal ditemukan:');
-      console.log('📅 Total hari tercatat:', scheduleDoc.schedule.length);
-    } else {
-      console.log('❌ Jadwal tidak ditemukan.');
+    if (!scheduleDocs.length) {
+      return res.status(200).json({
+        uid: user.uid,
+        name: user.name,
+        position: null,
+        email: user.email || null,
+        location: user.location || '',
+        schedule: [],
+      });
     }
+
+    // Gabungkan semua schedule dari seluruh dokumen user tersebut
+    const allSchedules = scheduleDocs.flatMap((doc) => doc.schedule);
 
     res.status(200).json({
       uid: user.uid,
       name: user.name,
+      position: scheduleDocs[0].position,
       email: user.email || null,
       location: user.location || '',
-      schedule: scheduleDoc ? scheduleDoc.schedule : [],
+      schedule: allSchedules,
     });
   } catch (err) {
     console.error('🔥 Error saat mengambil profil:', err);
