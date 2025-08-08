@@ -59,8 +59,72 @@ interface ImageUploadResult {
 
 // Helper functions
 function getCurrentDate(): string {
-  return new Date().toLocaleDateString('sv-SE');
+  try {
+    // Force Indonesia timezone regardless of server timezone
+    const formatter = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+
+    const date = formatter.format(new Date());
+    
+    // Log untuk monitoring (bisa dilihat di Railway logs)
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[TIMEZONE] Generated attendance date: ${date} (Asia/Jakarta)`);
+    }
+    
+    return date;
+  } catch (error) {
+    // Fallback method untuk Railway
+    console.warn('[TIMEZONE] Intl.DateTimeFormat failed, using manual calculation');
+    const now = new Date();
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const indonesiaTime = new Date(utc + (7 * 3600000)); // UTC+7
+    
+    const year = indonesiaTime.getFullYear();
+    const month = String(indonesiaTime.getMonth() + 1).padStart(2, '0');
+    const day = String(indonesiaTime.getDate()).padStart(2, '0');
+    
+    const fallbackDate = `${year}-${month}-${day}`;
+    console.log(`[TIMEZONE] Fallback date: ${fallbackDate}`);
+    return fallbackDate;
+  }
 }
+
+export async function testRailwayTimezone(req: Request, res: Response): Promise<void> {
+  const now = new Date();
+  
+  res.status(200).json({
+    message: 'Railway Timezone Test',
+    serverTime: now.toISOString(),
+    serverTimezone: process.env.TZ || 'Not Set',
+    detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timezoneOffset: now.getTimezoneOffset(),
+    
+    dates: {
+      serverLocalDate: now.toLocaleDateString('sv-SE'),
+      indonesiaDate: getCurrentDate(),
+      utcDate: new Date(now.getTime()).toISOString().split('T')[0]
+    },
+    
+    times: {
+      serverTime: now.toString(),
+      indonesiaTime: new Intl.DateTimeFormat('id-ID', {
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        timeZoneName: 'short'
+      }).format(now)
+    }
+  });
+}
+
 
 function formatDateString(date: string, month: string, year: string): string {
   const paddedDate = String(date).padStart(2, '0');
@@ -334,6 +398,7 @@ export async function fetchAttendance(req: Request, res: Response): Promise<void
   }
 }
 
+// Update fetchAttendanceByUser dengan logging yang lebih baik
 export async function fetchAttendanceByUser(req: Request, res: Response): Promise<void> {
   try {
     const { employeeId } = req.params;
@@ -350,7 +415,8 @@ export async function fetchAttendanceByUser(req: Request, res: Response): Promis
       return;
     }
 
-    console.log(`Processing attendance for user ${employeeId}...`);
+    const attendanceDate = getCurrentDate();
+    console.log(`[${employeeId}] Processing attendance for date: ${attendanceDate}`);
     
     const apiData = await fetchAttendanceFromAPI(employeeId);
 
@@ -358,8 +424,6 @@ export async function fetchAttendanceByUser(req: Request, res: Response): Promis
       res.status(400).json({ error: 'Attendance API returned unsuccessful response.' });
       return;
     }
-
-    const attendanceDate = getCurrentDate();
     
     // Process images
     const processedImages = await processAllImages(apiData, employeeId, attendanceDate);
@@ -373,20 +437,33 @@ export async function fetchAttendanceByUser(req: Request, res: Response): Promis
       processedImages
     );
 
+    // Log before saving for debugging
+    console.log(`[${employeeId}] Saving to database:`, {
+      userid: attendanceData.userid,
+      date: attendanceData.date,
+      hasStartTime: !!attendanceData.start_time,
+      hasEndTime: !!attendanceData.end_time
+    });
+
     const savedAttendance = await Attendance.findOneAndUpdate(
       { userid: employeeId, date: attendanceDate },
       attendanceData,
       { upsert: true, new: true }
     );
 
-    console.log(`Successfully processed attendance for user ${employeeId}`);
+    console.log(`[${employeeId}] Successfully saved attendance for ${attendanceDate}`);
 
     res.status(200).json({ 
       message: 'Attendance data fetched and saved successfully.', 
-      data: savedAttendance 
+      data: savedAttendance,
+      meta: {
+        processedDate: attendanceDate,
+        serverTime: new Date().toISOString(),
+        timezone: 'Asia/Jakarta (forced)'
+      }
     });
   } catch (error) {
-    console.error('Error in fetchAttendanceByUser:', error instanceof Error ? error.message : error);
+    console.error(`Error in fetchAttendanceByUser:`, error instanceof Error ? error.message : error);
     res.status(500).json({ error: 'Internal server error occurred while fetching user attendance.' });
   }
 }
