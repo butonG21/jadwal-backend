@@ -11,6 +11,7 @@ import { globalErrorHandler } from './middlewares/validation';
 import UserRoutes from './routes/userRoute';
 import authRoutes from './routes/authRoutes';
 import attendanceRoutes from './routes/attendance';
+import { testRailwayTimezone } from './controllers/attendanceController';
 
 
 const app = express();
@@ -80,6 +81,7 @@ app.use('/api/schedule', scheduleRoutes);
 app.use('/api/users', UserRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/test-timezone', testRailwayTimezone)
 
 
 // Root endpoint
