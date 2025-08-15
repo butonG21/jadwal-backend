@@ -6,194 +6,351 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import mongoose from 'mongoose';
+import morgan from 'morgan';
+import rateLimit from 'express-rate-limit';
+
+// Routes
 import scheduleRoutes from './routes/scheduleRoutes';
-import { globalErrorHandler } from './middlewares/validation';
-import UserRoutes from './routes/userRoute';
+import userRoutes from './routes/userRoute';
 import authRoutes from './routes/authRoutes';
 import attendanceRoutes from './routes/attendance';
-import { testRailwayTimezone } from './controllers/attendanceController';
 
+// Middleware
+import { globalErrorHandler, notFoundHandler } from './middlewares/errorHandler';
+import { validateEnvironment } from './config/environment';
+import { connectDatabase } from './config/database';
+import { logger } from './utils/loggers';
+import { ApiResponse } from './utils/apiResponse';
 
-const app = express();
-const PORT = process.env.PORT || 5000;
+class Application {
+  public app: express.Application;
+  private readonly PORT: number;
 
-// ==================== SECURITY & MIDDLEWARE ====================
-// Security headers
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" }
-}));
-
-// Compression middleware
-app.use(compression());
-
-// CORS configuration
-app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? ['https://yourapp.com'] // Replace with your production domains
-    : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:8080'],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
-// Body parsing middleware
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// Trust proxy for correct IP addresses
-app.set('trust proxy', 1);
-
-// ==================== DATABASE CONNECTION ====================
-const connectDB = async () => {
-  try {
-    // Periksa apakah MONGO_URI ada (sesuai dengan nama di .env)
-    if (!process.env.MONGO_URI) {
-      throw new Error('MONGO_URI environment variable is not defined. Please check your .env file.');
-    }
-
-    console.log('🔄 Connecting to MongoDB Atlas...');
-
-    const conn = await mongoose.connect(process.env.MONGO_URI);
-
-    console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
-    console.log(`📊 Database: ${conn.connection.name}`);
-  } catch (error) {
-    console.error('❌ MongoDB connection error:', error);
-    process.exit(1);
-  }
-};
-
-// ==================== ROUTES ====================
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Server is running',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    environment: process.env.NODE_ENV || 'development',
-    mongodb_connected: mongoose.connection.readyState === 1
-  });
-});
-
-// API routes
-app.use('/api/schedule', scheduleRoutes);
-app.use('/api/users', UserRoutes);
-app.use('/api/auth', authRoutes);
-app.use('/api/attendance', attendanceRoutes);
-app.use('/test-timezone', testRailwayTimezone)
-
-
-// Root endpoint
-app.get('/', (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Jadwal Backend API',
-    version: '1.0.0',
-    documentation: '/api/docs',
-    endpoints: {
-      health: 'GET /health',
-      schedules: {
-        upload: 'POST /api/schedule/upload-excel',
-        all: 'GET /api/schedule/all',
-        search: 'GET /api/schedule/search?name=:name',
-        employee: 'GET /api/schedule/:employeeId',
-        filter_month: 'GET /api/schedule/:employeeId/filter?month=:month&year=:year',
-        current_month: 'GET /api/schedule/:employeeId/current-month',
-        available_months: 'GET /api/schedule/:employeeId/available-months',
-        date_range: 'GET /api/schedule/:employeeId/date-range?start_date=:start&end_date=:end'
-      }
-    }
-  });
-});
-
-// 404 handler for undefined routes
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    error: 'Route not found',
-    message: `Cannot ${req.method} ${req.originalUrl}`,
-    available_routes: [
-      'GET /',
-      'GET /health',
-      'POST /api/schedule/upload-excel',
-      'GET /api/schedule/all',
-      'GET /api/schedule/search',
-      'GET /api/schedule/:employeeId',
-      'GET /api/schedule/:employeeId/filter',
-      'GET /api/schedule/:employeeId/current-month',
-      'GET /api/schedule/:employeeId/available-months',
-      'GET /api/schedule/:employeeId/date-range'
-    ]
-  });
-});
-
-// ==================== ERROR HANDLING ====================
-// Global error handler (must be last)
-app.use(globalErrorHandler);
-
-// ==================== SERVER STARTUP ====================
-const startServer = async () => {
-  try {
-    // Connect to database first
-    await connectDB();
+  constructor() {
+    this.app = express();
+    this.PORT = parseInt(process.env.PORT || '5000', 10);
     
-    // Start server
-    app.listen(PORT, () => {
-      console.log('🚀 Server started successfully');
-      console.log(`📡 Server running on port ${PORT}`);
-      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`📍 Local URL: http://localhost:${PORT}`);
-      console.log(`💚 Health check: http://localhost:${PORT}/health`);
-      console.log('==========================================');
+    this.validateEnvironment();
+    this.initializeMiddleware();
+    this.initializeRoutes();
+    this.initializeErrorHandling();
+  }
+
+  private validateEnvironment(): void {
+    validateEnvironment();
+  }
+
+  private initializeMiddleware(): void {
+    // Security middleware
+    this.app.use(helmet({
+      crossOriginResourcePolicy: { policy: "cross-origin" },
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          scriptSrc: ["'self'"],
+          imgSrc: ["'self'", "data:", "https:"],
+        },
+      },
+    }));
+
+    // Compression middleware
+    this.app.use(compression());
+
+    // Rate limiting
+    const limiter = rateLimit({
+      windowMs: 15 * 60 * 1000, // 15 minutes
+      max: 1000, // limit each IP to 1000 requests per windowMs
+      message: {
+        success: false,
+        error: 'Too many requests from this IP, please try again later.'
+      },
+      standardHeaders: true,
+      legacyHeaders: false,
     });
-    
-  } catch (error) {
-    console.error('❌ Failed to start server:', error);
-    process.exit(1);
+    this.app.use(limiter);
+
+    // CORS configuration
+    this.app.use(cors({
+      origin: this.getCorsOrigins(),
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+      exposedHeaders: ['X-Total-Count', 'X-Page-Count']
+    }));
+
+    // Logging middleware
+    if (process.env.NODE_ENV !== 'production') {
+      this.app.use(morgan('combined', {
+        stream: { write: (message) => logger.info(message.trim()) }
+      }));
+    }
+
+    // Body parsing middleware
+    this.app.use(express.json({ 
+      limit: '50mb',
+      verify: (req, res, buf) => {
+        (req as any).rawBody = buf;
+      }
+    }));
+    this.app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+    // Trust proxy for correct IP addresses
+    this.app.set('trust proxy', 1);
+
+    // Custom middleware for request context
+    this.app.use((req, res, next) => {
+      (req as any).requestId = this.generateRequestId();
+      (req as any).startTime = Date.now();
+      res.locals.requestId = (req as any).requestId;
+      next();
+    });
   }
-};
 
-// ==================== GRACEFUL SHUTDOWN ====================
-process.on('SIGTERM', async () => {
-  console.log('📴 SIGTERM received. Shutting down gracefully...');
-  
-  try {
-    await mongoose.connection.close();
-    console.log('✅ MongoDB connection closed');
-    process.exit(0);
-  } catch (error) {
-    console.error('❌ Error during shutdown:', error);
-    process.exit(1);
+  private getCorsOrigins(): string[] {
+    if (process.env.NODE_ENV === 'production') {
+      return process.env.CORS_ORIGINS?.split(',') || ['https://yourapp.com'];
+    }
+    return [
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://localhost:8080',
+      'http://127.0.0.1:3000',
+      'http://127.0.0.1:5173'
+    ];
   }
-});
 
-process.on('SIGINT', async () => {
-  console.log('📴 SIGINT received. Shutting down gracefully...');
-  
-  try {
-    await mongoose.connection.close();
-    console.log('✅ MongoDB connection closed');
-    process.exit(0);
-  } catch (error) {
-    console.error('❌ Error during shutdown:', error);
-    process.exit(1);
+  private generateRequestId(): string {
+    return Math.random().toString(36).substring(2, 15) + 
+           Math.random().toString(36).substring(2, 15);
   }
-});
 
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
-  process.exit(1);
-});
+  private initializeRoutes(): void {
+    // Health check endpoint
+    this.app.get('/health', this.healthCheck.bind(this));
+    this.app.get('/health/detailed', this.detailedHealthCheck.bind(this));
 
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-  process.exit(1);
-});
+    // API routes with versioning
+    const apiV1 = '/api/v1';
+    this.app.use(`${apiV1}/schedule`, scheduleRoutes);
+    this.app.use(`${apiV1}/users`, userRoutes);
+    this.app.use(`${apiV1}/auth`, authRoutes);
+    this.app.use(`${apiV1}/attendance`, attendanceRoutes);
 
-// Start the server
-startServer();
+    // Backward compatibility - keep old routes
+    this.app.use('/api/schedule', scheduleRoutes);
+    this.app.use('/api/users', userRoutes);
+    this.app.use('/api/auth', authRoutes);
+    this.app.use('/api/attendance', attendanceRoutes);
 
-export default app;
+    // Root endpoint with API documentation
+    this.app.get('/', this.rootEndpoint.bind(this));
+
+    // API documentation endpoint
+    this.app.get('/api/docs', this.apiDocumentation.bind(this));
+  }
+
+  private async healthCheck(req: express.Request, res: express.Response): Promise<void> {
+    const healthData = {
+      success: true,
+      message: 'Server is running',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      environment: process.env.NODE_ENV || 'development',
+      version: process.env.npm_package_version || '1.0.0',
+      mongodb_connected: mongoose.connection.readyState === 1,
+      memory_usage: process.memoryUsage(),
+      requestId: (req as any).requestId
+    };
+
+    res.status(200).json(ApiResponse.success('Health check passed', healthData));
+  }
+
+  private async detailedHealthCheck(req: express.Request, res: express.Response): Promise<void> {
+    const dbStatus = {
+      connected: mongoose.connection.readyState === 1,
+      host: mongoose.connection.host,
+      name: mongoose.connection.name,
+      readyState: mongoose.connection.readyState
+    };
+
+    const memoryUsage = process.memoryUsage();
+    const systemHealth = {
+      uptime: process.uptime(),
+      memory: {
+        rss: `${Math.round(memoryUsage.rss / 1024 / 1024)} MB`,
+        heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)} MB`,
+        heapUsed: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)} MB`,
+        external: `${Math.round(memoryUsage.external / 1024 / 1024)} MB`,
+        arrayBuffers: `${Math.round((memoryUsage as any).arrayBuffers / 1024 / 1024)} MB`
+      },
+      cpu: process.cpuUsage(),
+      platform: process.platform,
+      nodeVersion: process.version
+    };
+
+    const healthData = {
+      success: true,
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'development',
+      version: process.env.npm_package_version || '1.0.0',
+      database: dbStatus,
+      system: systemHealth,
+      services: {
+        imagekit: {
+          configured: !!(process.env.IMAGEKIT_PUBLIC_KEY && process.env.IMAGEKIT_PRIVATE_KEY)
+        },
+        external_api: {
+          attendance_api: !!process.env.ATTENDANCE_API_URL
+        }
+      }
+    };
+
+    const status = dbStatus.connected ? 200 : 503;
+    res.status(status).json(ApiResponse.success('Detailed health check', healthData));
+  }
+
+  private rootEndpoint(req: express.Request, res: express.Response): void {
+    const apiInfo = {
+      success: true,
+      message: 'Jadwal Backend API - Enhanced Version',
+      version: '2.0.0',
+      environment: process.env.NODE_ENV || 'development',
+      documentation: '/api/docs',
+      health_check: '/health',
+      detailed_health: '/health/detailed',
+      api_versions: {
+        v1: '/api/v1',
+        current: '/api' // backward compatibility
+      },
+      endpoints: {
+        auth: {
+          login: 'POST /api/v1/auth/login',
+          logout: 'POST /api/v1/auth/logout'
+        },
+        users: {
+          profile: 'GET /api/v1/users/me'
+        },
+        schedules: {
+          upload: 'POST /api/v1/schedule/upload-excel',
+          all: 'GET /api/v1/schedule/all',
+          search: 'GET /api/v1/schedule/search?name=:name',
+          employee: 'GET /api/v1/schedule/:employeeId',
+          filter_month: 'GET /api/v1/schedule/:employeeId/filter?month=:month&year=:year',
+          current_month: 'GET /api/v1/schedule/:employeeId/current-month',
+          available_months: 'GET /api/v1/schedule/:employeeId/available-months',
+          date_range: 'GET /api/v1/schedule/:employeeId/date-range?start_date=:start&end_date=:end'
+        },
+        attendance: {
+          fetch_all: 'POST /api/v1/attendance/fetch-all',
+          fetch_user: 'GET /api/v1/attendance/fetch/:employeeId',
+          filter: 'GET /api/v1/attendance/:employeeId/filter',
+          migrate_images: 'POST /api/v1/attendance/migrate-images',
+          migration_stats: 'GET /api/v1/attendance/migration-stats'
+        }
+      }
+    };
+
+    res.status(200).json(apiInfo);
+  }
+
+  private apiDocumentation(req: express.Request, res: express.Response): void {
+    // This would ideally serve Swagger/OpenAPI documentation
+    res.status(200).json({
+      success: true,
+      message: 'API Documentation',
+      swagger_url: '/api/docs/swagger',
+      postman_collection: '/api/docs/postman',
+      readme: 'https://github.com/yourrepo/api-docs'
+    });
+  }
+
+  private initializeErrorHandling(): void {
+    // 404 handler
+    this.app.use('*', notFoundHandler);
+
+    // Global error handler (must be last)
+    this.app.use(globalErrorHandler);
+  }
+
+  public async start(): Promise<void> {
+    try {
+      // Connect to database first
+      await connectDatabase();
+      
+      // Start server
+      const server = this.app.listen(this.PORT, () => {
+        logger.info('🚀 Server started successfully');
+        logger.info(`📡 Server running on port ${this.PORT}`);
+        logger.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+        logger.info(`📍 Local URL: http://localhost:${this.PORT}`);
+        logger.info(`💚 Health check: http://localhost:${this.PORT}/health`);
+        logger.info('==========================================');
+      });
+
+      // Graceful shutdown handlers
+      this.setupGracefulShutdown(server);
+      
+    } catch (error) {
+      logger.error('❌ Failed to start server:', error);
+      process.exit(1);
+    }
+  }
+
+  private setupGracefulShutdown(server: any): void {
+    const gracefulShutdown = async (signal: string) => {
+      logger.info(`📴 ${signal} received. Shutting down gracefully...`);
+      
+      try {
+        // Stop accepting new connections
+        server.close(async () => {
+          logger.info('🔌 HTTP server closed');
+          
+          // Close database connection
+          await mongoose.connection.close();
+          logger.info('✅ MongoDB connection closed');
+          
+          // Exit process
+          process.exit(0);
+        });
+
+        // Force close after timeout
+        setTimeout(() => {
+          logger.error('❌ Could not close connections in time, forcefully shutting down');
+          process.exit(1);
+        }, 30000);
+
+      } catch (error) {
+        logger.error('❌ Error during shutdown:', error);
+        process.exit(1);
+      }
+    };
+
+    // Handle shutdown signals
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+    // Handle uncaught exceptions
+    process.on('uncaughtException', (error) => {
+      logger.error('❌ Uncaught Exception:', error);
+      process.exit(1);
+    });
+
+    // Handle unhandled promise rejections
+    process.on('unhandledRejection', (reason, promise) => {
+      logger.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+      process.exit(1);
+    });
+  }
+}
+
+// Start the application
+if (require.main === module) {
+  const app = new Application();
+  app.start().catch((error) => {
+    console.error('Failed to start application:', error);
+    process.exit(1);
+  });
+}
+
+export default Application;

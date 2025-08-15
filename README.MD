@@ -1,69 +1,138 @@
-# Jadwal Backend API
+# Jadwal Backend API - Enhanced Version 2.0
 
-Sistem backend untuk mengelola jadwal karyawan dan sinkronisasi data absensi yang terintegrasi dengan sistem attendance eksternal.
+A robust, scalable Node.js/Express backend API for employee scheduling and attendance management with comprehensive error handling, security features, and modern architecture patterns.
 
-## 🚀 Gambaran Umum
+## 🚀 Key Improvements
 
-Jadwal Backend adalah aplikasi Node.js yang menggunakan MongoDB sebagai database untuk mengelola:
-- Import jadwal karyawan dari file Excel
-- Sinkronisasi data absensi dari API attendance eksternal
-- Autentikasi melalui proxy ke sistem attendance
-- Penyediaan API untuk aplikasi mobile Android
+### Architecture Enhancements
+- **Class-based Controllers**: Better organization and maintainability
+- **Service Layer Pattern**: Separation of business logic from controllers
+- **Centralized Configuration**: Environment validation and configuration management
+- **Enhanced Error Handling**: Comprehensive error types and handling middleware
+- **Logging System**: Winston-based structured logging
+- **Caching Layer**: Node-cache for improved performance
+- **Input Validation**: Joi-based request validation
 
-## 🏗️ Arsitektur Sistem
+### Security Improvements
+- **Enhanced JWT**: Proper token management with refresh capabilities
+- **Rate Limiting**: Protection against brute force attacks
+- **Helmet Security**: Comprehensive security headers
+- **Input Sanitization**: Protection against injection attacks
+- **CORS Configuration**: Proper cross-origin resource sharing setup
 
-### Flow Logic Sistem (High Level)
+### Performance & Reliability
+- **Connection Pooling**: Optimized MongoDB connections
+- **Image Processing**: Batch processing with proper error handling
+- **Graceful Shutdown**: Proper cleanup on application termination
+- **Health Checks**: Comprehensive system monitoring endpoints
+- **Request Tracing**: Request ID tracking for debugging
 
+## 📋 Prerequisites
+
+- **Node.js** >= 16.x
+- **MongoDB** >= 4.4
+- **npm** or **yarn**
+- **ImageKit Account** (for image storage)
+
+## 🔧 Environment Variables
+
+Create a `.env` file in the root directory:
+
+```bash
+# Server Configuration
+PORT=5000
+NODE_ENV=development
+
+# Database
+MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/database
+
+# JWT Configuration
+JWT_SECRET=your-super-secret-jwt-key-here
+JWT_EXPIRES_IN=7d
+JWT_ISSUER=jadwal-api
+
+# External APIs
+ATTENDANCE_API_URL=http://attendance-api.shabuhachi.id/service
+
+# ImageKit Configuration
+IMAGEKIT_PUBLIC_KEY=your_imagekit_public_key
+IMAGEKIT_PRIVATE_KEY=your_imagekit_private_key
+IMAGEKIT_URL_ENDPOINT=https://ik.imagekit.io/your_imagekit_id
+
+# CORS Configuration (production)
+CORS_ORIGINS=https://yourapp.com,https://www.yourapp.com
+
+# Rate Limiting
+RATE_LIMIT_WINDOW_MS=900000
+RATE_LIMIT_MAX_REQUESTS=1000
+
+# Logging
+LOG_LEVEL=info
+
+# Timezone
+TZ=Asia/Jakarta
 ```
-[Excel File] → [Backend: Upload Excel] → [MongoDB: Jadwal] → [App: Ambil Jadwal]
-[User Login] → [Backend: Proxy Auth] → [Attendance API] → [Response ke App]
-[UserID] → [Backend: Sync] → [Attendance API] → [MongoDB: Absensi] → [App: Tampil Data]
+
+## 🚀 Installation & Setup
+
+1. **Clone the repository**
+```bash
+git clone <repository-url>
+cd jadwal-backend
 ```
 
-## 📋 Fitur Utama
+2. **Install dependencies**
+```bash
+npm install
+```
 
-### 1. **Import Jadwal dari Excel**
-- Upload file Excel berisi jadwal karyawan
-- Parse dan mapping data ke schema karyawan
-- Penyimpanan ke MongoDB
+3. **Set up environment variables**
+```bash
+cp .env.example .env
+# Edit .env with your configuration
+```
 
-### 2. **Sinkronisasi Data Absensi**
-- Integrasi dengan API attendance eksternal
-- Fetch data clockin, clockout, break, lokasi, dan foto
-- Penyimpanan data absensi ke MongoDB
+4. **Start the application**
 
-### 3. **Sistem Autentikasi**
-- Proxy login ke API attendance eksternal
-- Manajemen token sesi
-- Validasi user credentials
+Development mode:
+```bash
+npm run dev
+```
 
-### 4. **Image Migration System**
-- Migrasi gambar absensi ke ImageKit
-- Batch processing dengan pagination
-- Progress tracking dan statistik migrasi
-- Force update untuk retry failed migrations
+Production mode:
+```bash
+npm run build
+npm start
+```
 
-## 🛠️ Teknologi yang Digunakan
+## 📚 API Documentation
 
-- **Runtime**: Node.js
-- **Database**: MongoDB
-- **File Processing**: Excel parsing
-- **HTTP Client**: Untuk integrasi API eksternal
-- **Authentication**: Token-based authentication
-- **Image Storage**: ImageKit (untuk migrasi dan storage gambar)
+### Base URLs
+- **Development**: `http://localhost:5000`
+- **Production**: `https://your-api-domain.com`
 
-## 📡 API Endpoints
+### API Versioning
+- **Current**: `/api/v1/`
+- **Backward Compatible**: `/api/` (redirects to v1)
 
-### Authentication
+## 🔐 Authentication
 
-#### POST `/api/auth/login`
-Login user melalui proxy ke API attendance.
+All protected endpoints require a Bearer token in the Authorization header:
 
-**Request Body:**
-```json
+```bash
+Authorization: Bearer <your-jwt-token>
+```
+
+### Authentication Endpoints
+
+#### Login
+```http
+POST /api/v1/auth/login
+Content-Type: application/json
+
 {
-  "username": "string",
-  "password": "string"
+  "username": "your-username",
+  "password": "your-password"
 }
 ```
 
@@ -71,489 +140,497 @@ Login user melalui proxy ke API attendance.
 ```json
 {
   "success": true,
-  "token": "session_token",
-  "user_id": "2405047",
-  "message": "Login successful"
-}
-```
-
-### Schedule Management
-
-#### POST `/api/schedule/upload-excel`
-Upload dan import jadwal dari file Excel.
-
-**Request:**
-- Method: POST
-- Content-Type: multipart/form-data
-- File: Excel file (.xlsx, .xls)
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Jadwal berhasil diimport",
-  "imported_count": 150
-}
-```
-
-#### GET `/api/schedule/:userid`
-Ambil jadwal karyawan berdasarkan user ID.
-
-**Parameters:**
-- `userid`: ID karyawan
-
-**Response:**
-```json
-{
-  "user_id": "2405047",
-  "name": "Anggi Firmansyah",
-  "schedule": [
-    {
-      "date": "2025-07-21",
-      "shift": "Pagi"
+  "message": "Login successful",
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "user": {
+      "uid": "user123",
+      "name": "John Doe",
+      "email": "john@example.com",
+      "location": "Jakarta"
     },
-    {
-      "date": "2025-07-22", 
-      "shift": "Siang"
-    }
-  ]
+    "expiresIn": "7d"
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z"
 }
 ```
 
-### Attendance Management
+#### Logout
+```http
+POST /api/v1/auth/logout
+Authorization: Bearer <token>
+```
 
-#### POST `/api/attendance/sync`
-Sinkronisasi data absensi dari API eksternal.
+#### Verify Token
+```http
+GET /api/v1/auth/verify
+Authorization: Bearer <token>
+```
 
-**Request Body:**
-```json
-{
-  "user_id": "2405047"
-}
+## 👤 User Management
+
+### Get User Profile
+```http
+GET /api/v1/users/me
+Authorization: Bearer <token>
 ```
 
 **Response:**
 ```json
 {
   "success": true,
-  "message": "Data absensi berhasil disinkronisasi",
-  "synced_records": 30
-}
-```
-
-#### GET `/api/attendance/:userid`
-Ambil data absensi karyawan.
-
-**Response:**
-```json
-{
-  "user_id": "2405047",
-  "date": "2025-07-21",
-  "clock_in": {
-    "time": "11:59:20",
-    "location": "MMX3+6MM...",
-    "image": "http://attendance-api.shabuhachi.id/images/2405047_20250721115920.jpg"
-  },
-  "break_out": {
-    "time": "12:30:15",
-    "location": "MMX3+6MM...",
-    "image": "http://attendance-api.shabuhachi.id/images/2405047_20250721123015.jpg"
-  },
-  "break_in": {
-    "time": "13:30:10",
-    "location": "MMX3+6MM...",
-    "image": "http://attendance-api.shabuhachi.id/images/2405047_20250721133010.jpg"
-  },
-  "clock_out": {
-    "time": "17:00:05",
-    "location": "MMX3+6MM...",
-    "image": "http://attendance-api.shabuhachi.id/images/2405047_20250721170005.jpg"
+  "message": "Profile retrieved successfully",
+  "data": {
+    "uid": "user123",
+    "name": "John Doe",
+    "position": "Staff",
+    "email": "john@example.com",
+    "location": "Jakarta",
+    "schedule": [...]
   }
 }
 ```
 
+## 📅 Schedule Management
+
+### Upload Excel Schedule
+```http
+POST /api/v1/schedule/upload-excel
+Content-Type: multipart/form-data
+Authorization: Bearer <token>
+
+Form Data:
+- file: <excel-file>
+```
+
+### Get All Schedules
+```http
+GET /api/v1/schedule/all
+Authorization: Bearer <token>
+```
+
+### Search Schedules by Name
+```http
+GET /api/v1/schedule/search?name=John
+Authorization: Bearer <token>
+```
+
+### Get Employee Schedule
+```http
+GET /api/v1/schedule/:employeeId
+Authorization: Bearer <token>
+```
+
+### Filter Schedule by Month
+```http
+GET /api/v1/schedule/:employeeId/filter?month=7&year=2025
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Schedule retrieved successfully for 7/2025",
+  "data": {
+    "employee_id": "2405047",
+    "name": "John Doe",
+    "position": "Staff",
+    "department": "IT",
+    "filter": {
+      "month": 7,
+      "year": 2025,
+      "month_name": "July",
+      "total_days": 22
+    },
+    "statistics": {
+      "total_scheduled_days": 22,
+      "shift_distribution": {
+        "Pagi": 10,
+        "Siang": 8,
+        "Malam": 4
+      },
+      "working_days_in_month": 31
+    },
+    "schedule": [
+      {
+        "date": "2025-07-01",
+        "shift": "Pagi"
+      }
+    ]
+  }
+}
+```
+
+### Get Current Month Schedule
+```http
+GET /api/v1/schedule/:employeeId/current-month
+Authorization: Bearer <token>
+```
+
+### Get Available Months
+```http
+GET /api/v1/schedule/:employeeId/available-months
+Authorization: Bearer <token>
+```
+
+### Get Schedule by Date Range
+```http
+GET /api/v1/schedule/:employeeId/date-range?start_date=2025-07-01&end_date=2025-07-31
+Authorization: Bearer <token>
+```
+
+## 🕒 Attendance Management
+
+### Fetch All Attendance
+```http
+POST /api/v1/attendance/fetch-all
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Attendance fetch process completed",
+  "data": {
+    "processed": 50,
+    "success": 48,
+    "failed": 2,
+    "total": 50,
+    "date": "2025-01-15",
+    "results": [...],
+    "hasMoreResults": false
+  }
+}
+```
+
+### Fetch User Attendance
+```http
+GET /api/v1/attendance/fetch/:employeeId
+Authorization: Bearer <token>
+```
+
+### Get Attendance by Filter
+```http
+GET /api/v1/attendance/:employeeId/filter?date=15&month=1&year=2025
+Authorization: Bearer <token>
+```
+
 ### Image Migration
 
-#### POST `/api/attendance/migrate-images`
-Migrasi semua URL gambar yang ada di database ke ImageKit.
+#### Start Migration
+```http
+POST /api/v1/attendance/migrate-images?limit=50&skip=0&forceUpdate=false
+Authorization: Bearer <token>
+```
 
-**Query Parameters:**
-- `limit` (number, default: 50): Jumlah record yang akan diproses per request
-- `skip` (number, default: 0): Jumlah record yang akan di-skip (untuk pagination)
-- `forceUpdate` (boolean, default: false): Jika true, akan migrasi ulang gambar yang sudah ada di ImageKit
+#### Get Migration Stats
+```http
+GET /api/v1/attendance/migration-stats
+Authorization: Bearer <token>
+```
 
-**Request Examples:**
+## 🏥 Health & Monitoring
+
+### Basic Health Check
+```http
+GET /health
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Health check passed",
+  "data": {
+    "success": true,
+    "message": "Server is running",
+    "timestamp": "2025-01-15T10:30:00.000Z",
+    "uptime": 3600,
+    "environment": "development",
+    "version": "2.0.0",
+    "mongodb_connected": true,
+    "memory_usage": {...}
+  }
+}
+```
+
+### Detailed Health Check
+```http
+GET /health/detailed
+```
+
+## 🔧 Error Handling
+
+All API responses follow a consistent format:
+
+### Success Response
+```json
+{
+  "success": true,
+  "message": "Operation completed successfully",
+  "data": {...},
+  "meta": {...},
+  "timestamp": "2025-01-15T10:30:00.000Z"
+}
+```
+
+### Error Response
+```json
+{
+  "success": false,
+  "message": "Error description",
+  "error": "ERROR_CODE",
+  "statusCode": 400,
+  "details": {...},
+  "timestamp": "2025-01-15T10:30:00.000Z"
+}
+```
+
+### Common Error Codes
+
+| Status | Error Code | Description |
+|--------|------------|-------------|
+| 400 | VALIDATION_ERROR | Input validation failed |
+| 401 | UNAUTHENTICATED | No valid token provided |
+| 401 | TOKEN_EXPIRED | JWT token has expired |
+| 403 | ACCESS_DENIED | Insufficient permissions |
+| 404 | NOT_FOUND | Resource not found |
+| 409 | DUPLICATE_ERROR | Resource already exists |
+| 429 | RATE_LIMIT_EXCEEDED | Too many requests |
+| 500 | INTERNAL_ERROR | Server error |
+| 502 | EXTERNAL_API_ERROR | External service error |
+| 503 | SERVICE_UNAVAILABLE | Service temporarily down |
+
+## 📝 Logging
+
+The application uses structured logging with different levels:
+
+- **error**: System errors and exceptions
+- **warn**: Warning conditions
+- **info**: General information
+- **debug**: Debug information (development only)
+
+### Log Format
+```json
+{
+  "timestamp": "2025-01-15 10:30:00",
+  "level": "info",
+  "message": "User login successful",
+  "service": "jadwal-api",
+  "uid": "user123",
+  "requestId": "req-abc123"
+}
+```
+
+## 🚀 Deployment
+
+### Docker Deployment
+
+1. **Create Dockerfile:**
+```dockerfile
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --only=production
+
+COPY . .
+RUN npm run build
+
+EXPOSE 5000
+
+USER node
+
+CMD ["npm", "start"]
+```
+
+2. **Build and run:**
 ```bash
-# Migrasi 50 record pertama
-POST /api/attendance/migrate-images
-
-# Migrasi dengan pagination
-POST /api/attendance/migrate-images?limit=20&skip=40
-
-# Force update gambar yang sudah di ImageKit
-POST /api/attendance/migrate-images?forceUpdate=true&limit=10
+docker build -t jadwal-api .
+docker run -p 5000:5000 --env-file .env jadwal-api
 ```
 
-**Response:**
+### Railway Deployment
+
+1. **Create railway.json:**
 ```json
 {
-  "message": "Image migration process completed.",
-  "totalRecords": 1250,
-  "processed": 50,
-  "success": 48,
-  "failed": 2,
-  "hasMore": true,
-  "nextSkip": 50,
-  "results": [
-    {
-      "userid": "EMP001",
-      "date": "2024-01-15",
-      "images": {
-        "start_image": {
-          "original": "http://external-api.com/image1.jpg",
-          "migrated": "https://ik.imagekit.io/yourkit/attendance/2024/01/EMP001_20240115_start_1705123456.jpg"
-        },
-        "break_out_image": {
-          "original": "http://external-api.com/image2.jpg", 
-          "migrated": "https://ik.imagekit.io/yourkit/attendance/2024/01/EMP001_20240115_break_out_1705123457.jpg"
-        },
-        "break_in_image": {
-          "original": "http://external-api.com/image3.jpg",
-          "error": "Failed to download image"
-        },
-        "end_image": {
-          "original": "https://ik.imagekit.io/yourkit/existing.jpg",
-          "migrated": "https://ik.imagekit.io/yourkit/existing.jpg",
-          "error": "Already migrated (skipped)"
-        }
-      }
-    }
-  ]
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "npm start",
+    "healthcheckPath": "/health"
+  }
 }
 ```
 
-#### GET `/api/attendance/migration-stats`
-Mendapatkan statistik proses migrasi gambar.
+2. **Environment Variables:**
+Set all required environment variables in Railway dashboard.
 
-**Response:**
-```json
-{
-  "message": "Migration statistics retrieved successfully.",
-  "stats": {
-    "totalWithImages": 1250,
-    "alreadyMigrated": 450,
-    "needMigration": 800,
-    "migrationProgress": "36.00%"
-  },
-  "sampleRecords": [
-    {
-      "userid": "EMP001",
-      "date": "2024-01-15",
-      "imageUrls": {
-        "start_image": "http://external-api.com/image1.jpg",
-        "break_out_image": "http://external-api.com/image2.jpg",
-        "break_in_image": null,
-        "end_image": "http://external-api.com/image4.jpg"
-      }
-    }
-  ]
-}
-```
+### Production Checklist
 
-## 🗄️ Struktur Database MongoDB
-
-### Collection: Schedules
-```javascript
-{
-  "user_id": "2405047",
-  "name": "Anggi Firmansyah", 
-  "schedule": [
-    {
-      "date": "2025-07-21",
-      "shift": "Pagi"
-    }
-  ],
-  "created_at": "2025-01-15T10:30:00Z",
-  "updated_at": "2025-01-15T10:30:00Z"
-}
-```
-
-### Collection: Attendances
-```javascript
-{
-  "user_id": "2405047",
-  "date": "2025-07-21",
-  "clock_in": {
-    "time": "11:59:20",
-    "location": "MMX3+6MM...",
-    "image": "http://attendance-api.shabuhachi.id/images/2405047_20250721115920.jpg"
-  },
-  "break_out": {
-    "time": "12:30:15",
-    "location": "MMX3+6MM...", 
-    "image": "http://attendance-api.shabuhachi.id/images/2405047_20250721123015.jpg"
-  },
-  "break_in": {
-    "time": "13:30:10",
-    "location": "MMX3+6MM...",
-    "image": "http://attendance-api.shabuhachi.id/images/2405047_20250721133010.jpg"
-  },
-  "clock_out": {
-    "time": "17:00:05",
-    "location": "MMX3+6MM...",
-    "image": "http://attendance-api.shabuhachi.id/images/2405047_20250721170005.jpg"
-  },
-  "created_at": "2025-01-15T10:30:00Z",
-  "updated_at": "2025-01-15T10:30:00Z"
-}
-```
-
-### Collection: Users (Optional)
-```javascript
-{
-  "user_id": "2405047",
-  "username": "anggi.firmansyah",
-  "name": "Anggi Firmansyah",
-  "email": "anggi@company.com",
-  "department": "IT",
-  "position": "Software Developer",
-  "created_at": "2025-01-15T10:30:00Z",
-  "last_login": "2025-01-15T10:30:00Z"
-}
-```
-
-## 🔗 Integrasi API Eksternal
-
-### Attendance API
-**Base URL**: `http://attendance-api.shabuhachi.id`
-
-#### Endpoints yang Digunakan:
-1. **Login Check**: `/service/check_login1.php`
-2. **Trip Report**: `/service/getTripReport1.php`
-
-## 📱 Integrasi dengan Aplikasi Mobile
-
-### Flow Aplikasi Android:
-
-1. **Login**
-   - Input username & password
-   - Kirim ke `/api/auth/login`
-   - Simpan token dan user_id
-
-2. **Ambil Jadwal**
-   - Request ke `/api/schedule/:userid`
-   - Tampilkan di kalender mobile
-
-3. **Sinkronisasi Absensi**
-   - Request ke `/api/attendance/sync`
-   - Tampilkan data absensi (clockin/out, lokasi, foto)
-
-4. **Image Migration (Admin)**
-   - Check migration stats: `/api/attendance/migration-stats`
-   - Migrate images: `/api/attendance/migrate-images`
-   - Monitor progress dan handle errors
-
-## 🚀 Instalasi & Setup
-
-### Prerequisites
-- Node.js (v14 atau lebih baru)
-- MongoDB (v4.4 atau lebih baru)
-- NPM atau Yarn
-
-### Langkah Instalasi
-
-1. **Clone Repository**
-   ```bash
-   git clone https://github.com/butonG21/jadwal-backend.git
-   cd jadwal-backend
-   ```
-
-2. **Install Dependencies**
-   ```bash
-   npm install
-   ```
-
-3. **Environment Configuration**
-   ```bash
-   cp .env.example .env
-   ```
-   
-   Edit file `.env`:
-   ```env
-   PORT=3000
-   MONGODB_URI=mongodb://localhost:27017/jadwal_db
-   ATTENDANCE_API_BASE_URL=http://attendance-api.shabuhachi.id
-   JWT_SECRET=your_jwt_secret_key
-   NODE_ENV=development
-   
-   # ImageKit Configuration (for image migration)
-   IMAGEKIT_PUBLIC_KEY=your_imagekit_public_key
-   IMAGEKIT_PRIVATE_KEY=your_imagekit_private_key
-   IMAGEKIT_URL_ENDPOINT=https://ik.imagekit.io/your_imagekit_id
-   ```
-
-4. **Jalankan Aplikasi**
-   ```bash
-   # Development mode
-   npm run dev
-   
-   # Production mode
-   npm start
-   ```
+- [ ] Set `NODE_ENV=production`
+- [ ] Configure proper MongoDB connection string
+- [ ] Set secure JWT secret (minimum 32 characters)
+- [ ] Configure CORS origins for your domain
+- [ ] Set up proper SSL/TLS certificates
+- [ ] Configure rate limiting appropriately
+- [ ] Set up monitoring and alerting
+- [ ] Configure log aggregation
+- [ ] Set up database backups
+- [ ] Configure ImageKit for production
 
 ## 🧪 Testing
 
-### Manual Testing
-Gunakan tools seperti Postman atau Insomnia untuk testing API endpoints.
+### Run Tests
+```bash
+# Unit tests
+npm run test
 
-### Collection Postman
-Import collection Postman yang tersedia di folder `/docs/postman/` (jika ada).
+# Integration tests
+npm run test:integration
 
-## 📁 Struktur Project
-
+# Coverage report
+npm run test:coverage
 ```
-jadwal-backend/
-├── src/
+
+### Test Structure
+```
+tests/
+├── unit/
 │   ├── controllers/
-│   │   ├── authController.js
-│   │   ├── scheduleController.js
-│   │   └── attendanceController.js
-│   ├── models/
-│   │   ├── User.js
-│   │   ├── Schedule.js
-│   │   └── Attendance.js
-│   ├── routes/
-│   │   ├── auth.js
-│   │   ├── schedule.js
-│   │   └── attendance.js
-│   ├── middleware/
-│   │   ├── authentication.js
-│   │   └── validation.js
 │   ├── services/
-│   │   ├── attendanceService.js
-│   │   ├── excelParser.js
-│   │   └── imageMigrationService.js
 │   └── utils/
-│       ├── database.js
-│       └── helpers.js
-├── uploads/
-├── docs/
-├── .env.example
-├── .gitignore
-├── package.json
-└── README.md
+├── integration/
+│   ├── auth.test.js
+│   ├── schedule.test.js
+│   └── attendance.test.js
+└── fixtures/
+    └── sample-data.json
 ```
 
-## 🖼️ Image Migration Workflow
+## 📊 Performance Optimization
 
-### Migration Process Overview
-Sistem ini menyediakan fitur untuk memigrasikan gambar absensi dari server eksternal ke ImageKit untuk performa dan reliability yang lebih baik.
+### Caching Strategy
+- **User profiles**: 30 minutes TTL
+- **Schedule data**: 1 hour TTL
+- **Attendance data**: 5 minutes TTL
+- **Health checks**: 1 minute TTL
 
-### Step-by-Step Migration
+### Database Optimization
+- **Indexes**: Proper indexing on frequently queried fields
+- **Connection Pooling**: Optimized MongoDB connections
+- **Query Optimization**: Efficient aggregation pipelines
 
-#### 1. Check Migration Statistics
-```bash
-GET /api/attendance/migration-stats
+### Image Processing
+- **Batch Processing**: Process images in small batches
+- **Error Recovery**: Fallback to original URLs on failure
+- **Timeout Management**: Proper timeout handling
+- **Retry Logic**: Automatic retry on transient failures
+
+## 🔒 Security Best Practices
+
+### Implemented Security Features
+- **Helmet**: Security headers
+- **Rate Limiting**: Protection against brute force
+- **JWT Security**: Proper token validation
+- **Input Validation**: Joi-based validation
+- **CORS Configuration**: Restricted origins
+- **Error Handling**: No sensitive data exposure
+
+### Security Checklist
+- [ ] Regular security audits (`npm audit`)
+- [ ] Keep dependencies updated
+- [ ] Use HTTPS in production
+- [ ] Implement proper logging
+- [ ] Monitor for suspicious activity
+- [ ] Regular backup verification
+- [ ] Access control reviews
+
+## 🛠️ Development
+
+### Code Structure
 ```
-Cek berapa total gambar yang perlu dimigrasi dan progress saat ini.
-
-#### 2. Start Batch Migration
-```bash
-# Mulai dengan batch pertama (50 records)
-POST /api/attendance/migrate-images?limit=50
-
-# Lanjutkan dengan batch berikutnya
-POST /api/attendance/migrate-images?limit=50&skip=50
-```
-
-#### 3. Monitor Progress
-```bash
-# Cek progress setelah beberapa batch
-GET /api/attendance/migration-stats
-```
-
-#### 4. Handle Failed Images
-```bash
-# Retry failed migrations dengan force update
-POST /api/attendance/migrate-images?forceUpdate=true&limit=10
-```
-
-### Migration Best Practices
-
-#### Batch Processing
-- Gunakan limit kecil (20-50) untuk menghindari timeout
-- Tunggu selesai satu batch sebelum memulai batch berikutnya
-- Monitor server resources selama proses migrasi
-
-#### Error Recovery
-- Jika ada batch yang gagal, ulangi dengan skip yang sama
-- Gunakan `forceUpdate=true` untuk retry gambar yang gagal
-- Check migration stats secara berkala
-
-#### Production Considerations
-- Jalankan migrasi saat traffic rendah
-- Setup monitoring dan alerting
-- Backup database sebelum migrasi besar-besaran
-- Consider menggunakan queue system untuk proses yang sangat besar
-
-### Monitoring Commands
-```bash
-# Cek total progress
-curl "http://localhost:3000/api/attendance/migration-stats"
-
-# Migrasi batch kecil untuk testing
-curl -X POST "http://localhost:3000/api/attendance/migrate-images?limit=5"
-
-# Force update untuk retry failed images
-curl -X POST "http://localhost:3000/api/attendance/migrate-images?limit=10&forceUpdate=true"
+src/
+├── config/          # Configuration files
+├── controllers/     # Route controllers
+├── middlewares/     # Express middlewares
+├── models/         # Database models
+├── routes/         # Route definitions
+├── services/       # Business logic services
+├── utils/          # Utility functions
+└── app.ts         # Main application file
 ```
 
-- **Authentication**: Token-based authentication
-- **Validation**: Input validation untuk semua endpoints
-- **CORS**: Configured untuk aplikasi mobile
-- **Rate Limiting**: Implementasi rate limiting untuk API
-- **Error Handling**: Comprehensive error handling
+### Development Workflow
+1. **Feature Branch**: Create feature branch from main
+2. **Development**: Write code with tests
+3. **Testing**: Run all tests locally
+4. **Code Review**: Submit pull request
+5. **Integration**: Merge after review and tests pass
+6. **Deployment**: Deploy to staging then production
 
-## 📊 Monitoring & Logging
+### Code Style
+- **ESLint**: JavaScript/TypeScript linting
+- **Prettier**: Code formatting
+- **Husky**: Pre-commit hooks
+- **TypeScript**: Static type checking
 
-- **Logging**: Implementasi logging untuk tracking request/response
-- **Error Tracking**: Error tracking untuk debugging
-- **Performance**: Monitoring performance API
+## 📈 Monitoring & Observability
 
-## 🤝 Kontribusi
+### Metrics to Monitor
+- **Response Times**: API endpoint performance
+- **Error Rates**: 4xx and 5xx response rates
+- **Database Performance**: Query execution times
+- **Memory Usage**: Heap and RSS memory
+- **External API Health**: Third-party service availability
 
-1. Fork repository
-2. Create feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open Pull Request
+### Recommended Tools
+- **Application Monitoring**: New Relic, DataDog, or AppDynamics
+- **Log Management**: ELK Stack or Splunk
+- **Uptime Monitoring**: Pingdom or UptimeRobot
+- **Error Tracking**: Sentry or Bugsnag
 
-## 📄 Lisensi
+## 🤝 Contributing
 
-Proyek ini menggunakan lisensi [MIT License](LICENSE).
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-## 📞 Kontak
+## 📄 License
 
-- **Developer**: butonG21
-- **GitHub**: [https://github.com/butonG21](https://github.com/butonG21)
-- **Repository**: [https://github.com/butonG21/jadwal-backend](https://github.com/butonG21/jadwal-backend)
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🔄 Changelog
+## 📞 Support
 
-### Version 1.0.0
-- Initial release
-- Basic CRUD operations untuk jadwal
-- Integrasi dengan attendance API
-- Authentication system
-- Excel import functionality
+For support and questions:
+- **Email**: support@yourcompany.com
+- **Documentation**: https://docs.yourapi.com
+- **Issue Tracker**: https://github.com/yourrepo/issues
 
-### Version 1.1.0
-- Image migration system ke ImageKit
-- Batch processing untuk migrasi
-- Migration statistics dan monitoring
-- Error handling untuk failed migrations
-- Force update functionality
+## 🎯 Roadmap
+
+### Version 2.1 (Planned)
+- [ ] Real-time notifications with WebSocket
+- [ ] Advanced reporting and analytics
+- [ ] Role-based access control (RBAC)
+- [ ] Multi-language support
+- [ ] Mobile app API endpoints
+
+### Version 2.2 (Future)
+- [ ] GraphQL API support
+- [ ] Microservices architecture
+- [ ] Event-driven architecture
+- [ ] Advanced caching with Redis
+- [ ] Machine learning integration
 
 ---
 
-*Dokumentasi ini akan terus diperbarui seiring dengan pengembangan fitur baru.*
+**Made with ❤️ by the Development Team**

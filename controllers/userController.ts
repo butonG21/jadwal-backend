@@ -5,6 +5,12 @@ import { AuthenticatedRequest } from '../middlewares/verifyToken';
 export const getProfile = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const user = req.user;
+    
+    // Add null check for user
+    if (!user) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
     const userNameLower = user.name?.toLowerCase();
 
     // Ambil SEMUA dokumen Schedule milik user (Juli, Agustus, dst)
@@ -21,7 +27,7 @@ export const getProfile = async (req: AuthenticatedRequest, res: Response) => {
         name: user.name,
         position: null,
         email: user.email || null,
-        location: user.location || '',
+        location: '', // Remove user.location since it doesn't exist on the type
         schedule: [],
       });
     }
@@ -34,7 +40,7 @@ export const getProfile = async (req: AuthenticatedRequest, res: Response) => {
       name: user.name,
       position: scheduleDocs[0].position,
       email: user.email || null,
-      location: user.location || '',
+      location: '', // Remove user.location since it doesn't exist on the type
       schedule: allSchedules,
     });
   } catch (err) {
