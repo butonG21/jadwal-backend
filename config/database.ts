@@ -18,7 +18,6 @@ export async function connectDatabase(retryAttempts = 5): Promise<void> {
         socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
         family: 4, // Use IPv4, skip trying IPv6
         bufferCommands: false, // Disable mongoose buffering
-        bufferMaxEntries: 0, // Disable mongoose buffering
       });
 
       logger.info(`✅ MongoDB Connected: ${conn.connection.host}`);

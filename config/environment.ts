@@ -11,7 +11,7 @@ export interface AppConfig {
     JWT_EXPIRES_IN: string;
     
     // External Services
-    ATTENDANCE_API_URL: string;
+    ATTENDANCE_API_URL?: string;
     
     // ImageKit Configuration
     IMAGEKIT_PUBLIC_KEY: string;
@@ -47,7 +47,7 @@ export interface AppConfig {
       MONGO_URI: process.env.MONGO_URI!,
       JWT_SECRET: process.env.JWT_SECRET!,
       JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '7d',
-      ATTENDANCE_API_URL: process.env.ATTENDANCE_API_URL
+      ATTENDANCE_API_URL: process.env.ATTENDANCE_API_URL,
       IMAGEKIT_PUBLIC_KEY: process.env.IMAGEKIT_PUBLIC_KEY!,
       IMAGEKIT_PRIVATE_KEY: process.env.IMAGEKIT_PRIVATE_KEY!,
       IMAGEKIT_URL_ENDPOINT: process.env.IMAGEKIT_URL_ENDPOINT!,

@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import { ApiResponse } from './apiResponse';
 
 export const validationSchemas = {
   employeeId: Joi.string().trim().min(1).max(50).required(),
@@ -60,7 +61,7 @@ export function validateRequest(schema: Joi.ObjectSchema) {
       }));
 
       return res.status(400).json(
-        ApiResponse.error(
+        ApiResponse.error( 
           'Validation failed',
           'VALIDATION_ERROR',
           400,

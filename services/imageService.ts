@@ -1,7 +1,7 @@
 import axios from 'axios';
 import ImageKit from 'imagekit';
 import Attendance from '../models/Attendance';
-import { logger } from '../utils/logger';
+import { logger } from '../utils/loggers';
 import { AppError } from '../utils/errorTypes';
 import { IMAGE_PROCESSING } from '../config/constants';
 

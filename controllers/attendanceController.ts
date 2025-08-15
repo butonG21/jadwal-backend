@@ -87,50 +87,52 @@ class AttendanceController {
   // Fetch attendance data from external API
   private async fetchAttendanceFromAPI(userId: string): Promise<AttendanceApiResponse> {
     const cacheKey = `attendance_api_${userId}_${DateHelper.getCurrentDateIndonesia()}`;
-    
-    // Try to get from cache first
     const cached = cache.get<AttendanceApiResponse>(cacheKey);
     if (cached) {
       logger.info(`Cache hit for attendance data: ${userId}`);
       return cached;
     }
-
-    try {
-      const formData = new URLSearchParams();
-      formData.append('userid', userId);
-
-      const response: AxiosResponse = await axios.post(
-        `${API_ENDPOINTS.ATTENDANCE_API_BASE}/${API_ENDPOINTS.ATTENDANCE_GET_TRIP_REPORT}`,
-        formData.toString(),
-        {
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          timeout: 15000, // Increased timeout
-          retry: 3, // Add retry logic
+  
+    const formData = new URLSearchParams();
+    formData.append('userid', userId);
+  
+    let attempts = 0;
+    const maxRetries = 3;
+    const url = `${API_ENDPOINTS.ATTENDANCE_API_BASE}/${API_ENDPOINTS.ATTENDANCE_GET_TRIP_REPORT}`;
+  
+    while (attempts < maxRetries) {
+      try {
+        const response: AxiosResponse = await axios.post(
+          url,
+          formData.toString(),
+          {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            timeout: 15000,
+          }
+        );
+  
+        const data = response.data as AttendanceApiResponse;
+        if (data.success) {
+          cache.set(cacheKey, data, 300);
         }
-      );
-
-      const data = response.data as AttendanceApiResponse;
-      
-      // Cache successful responses for 5 minutes
-      if (data.success) {
-        cache.set(cacheKey, data, 300);
+        return data;
+      } catch (error: any) {
+        attempts++;
+        logger.warn(`Attempt ${attempts} failed for user ${userId}: ${error.message}`);
+        if (attempts >= maxRetries) {
+          logger.error(`Failed to fetch attendance after ${maxRetries} attempts`, {
+            error: error.message,
+            status: error.response?.status,
+            data: error.response?.data
+          });
+          throw handleExternalApiError(error, 'Attendance API');
+        }
+        await new Promise(res => setTimeout(res, 1000)); // delay sebelum retry
       }
-
-      return data;
-      
-    } catch (error: any) {
-      logger.error(`Failed to fetch attendance data for user ${userId}:`, {
-        error: error.message,
-        status: error.response?.status,
-        data: error.response?.data
-      });
-      
-      throw handleExternalApiError(error, 'Attendance API');
     }
+  
+    throw new AppError('Unexpected error in fetchAttendanceFromAPI', 500);
   }
-
   // Process and save attendance data
   private async processAttendanceData(
     userId: string,

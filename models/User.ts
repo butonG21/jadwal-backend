@@ -1,7 +1,7 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 import { logger } from '../utils/loggers';
 
-export interface IUser extends Document {
+export interface IUserBase {
   uid: string;
   name: string;
   email?: string;
@@ -13,9 +13,11 @@ export interface IUser extends Document {
   updatedAt: Date;
 }
 
+export interface IUser extends IUserBase, Document {}
+
 interface IUserMethods {
   updateLastLogin(): Promise<IUser>;
-  getProfile(): Partial<IUser>;
+  getProfile(): IUserBase;
 }
 
 interface UserModel extends Model<IUser, {}, IUserMethods> {
@@ -78,7 +80,7 @@ const UserSchema = new Schema<IUser, UserModel, IUserMethods>({
 });
 
 // Instance Methods
-UserSchema.methods.updateLastLogin = async function(): Promise<IUser> {
+UserSchema.methods.updateLastLogin = async function(this: IUser): Promise<IUser> {
   this.lastLogin = new Date();
   this.loginCount += 1;
   await this.save();
@@ -92,7 +94,7 @@ UserSchema.methods.updateLastLogin = async function(): Promise<IUser> {
   return this;
 };
 
-UserSchema.methods.getProfile = function(): Partial<IUser> {
+UserSchema.methods.getProfile = function(this: IUser): IUserBase {
   return {
     uid: this.uid,
     name: this.name,
@@ -100,17 +102,18 @@ UserSchema.methods.getProfile = function(): Partial<IUser> {
     location: this.location,
     isActive: this.isActive,
     lastLogin: this.lastLogin,
+    loginCount: this.loginCount,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt
   };
 };
 
 // Static Methods
-UserSchema.statics.findByUid = function(uid: string) {
+UserSchema.statics.findByUid = function(this: UserModel, uid: string): Promise<IUser | null> {
   return this.findOne({ uid, isActive: true });
 };
 
-UserSchema.statics.findActiveUsers = function() {
+UserSchema.statics.findActiveUsers = function(this: UserModel): Promise<IUser[]> {
   return this.find({ isActive: true }).select('-__v').sort({ name: 1 });
 };
 
