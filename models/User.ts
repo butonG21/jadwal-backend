@@ -1,138 +1,203 @@
-import mongoose, { Schema, Document, Model } from 'mongoose';
-import { logger } from '../utils/loggers';
+// models/User.ts (Updated with profile image fields)
+import mongoose, { Document, Schema } from 'mongoose';
 
-export interface IUserBase {
+interface IUser extends Document {
   uid: string;
   name: string;
   email?: string;
   location?: string;
-  isActive: boolean;
-  lastLogin?: Date;
-  loginCount: number;
+  
+  // Profile Image Fields
+  profileImage?: string;
+  profileImageThumbnail?: string;
+  profileImageFileId?: string;
+  profileImageAlt?: string;
+  profileImageCaption?: string;
+  
+  // Metadata
   createdAt: Date;
   updatedAt: Date;
+  lastLoginAt?: Date;
 }
 
-export interface IUser extends IUserBase, Document {}
-
-interface IUserMethods {
-  updateLastLogin(): Promise<IUser>;
-  getProfile(): IUserBase;
-}
-
-interface UserModel extends Model<IUser, {}, IUserMethods> {
-  findByUid(uid: string): Promise<IUser | null>;
-  findActiveUsers(): Promise<IUser[]>;
-}
-
-const UserSchema = new Schema<IUser, UserModel, IUserMethods>({
-  uid: { 
-    type: String, 
-    required: [true, 'User ID is required'],
+const userSchema = new Schema<IUser>({
+  uid: {
+    type: String,
+    required: true,
     unique: true,
     trim: true,
     index: true
   },
-  name: { 
+  name: {
     type: String,
-    required: [true, 'Name is required'],
+    required: true,
     trim: true,
-    maxlength: [100, 'Name cannot exceed 100 characters']
+    maxlength: 100
   },
-  email: { 
+  email: {
     type: String,
     trim: true,
     lowercase: true,
-    validate: {
-      validator: function(email: string) {
-        if (!email) return true; // Email is optional
-        return /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/.test(email);
-      },
-      message: 'Please enter a valid email address'
-    }
+    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email']
   },
-  location: { 
+  location: {
     type: String,
     trim: true,
-    maxlength: [200, 'Location cannot exceed 200 characters']
+    maxlength: 100
   },
-  isActive: {
-    type: Boolean,
-    default: true
+  
+  // Profile Image Fields
+  profileImage: {
+    type: String,
+    trim: true,
+    validate: {
+      validator: function(v: string) {
+        return !v || /^https?:\/\/.+/.test(v);
+      },
+      message: 'Profile image must be a valid URL'
+    }
   },
-  lastLogin: {
+  profileImageThumbnail: {
+    type: String,
+    trim: true,
+    validate: {
+      validator: function(v: string) {
+        return !v || /^https?:\/\/.+/.test(v);
+      },
+      message: 'Profile image thumbnail must be a valid URL'
+    }
+  },
+  profileImageFileId: {
+    type: String,
+    trim: true,
+    index: true
+  },
+  profileImageAlt: {
+    type: String,
+    trim: true,
+    maxlength: 200
+  },
+  profileImageCaption: {
+    type: String,
+    trim: true,
+    maxlength: 500
+  },
+  
+  // Metadata
+  createdAt: {
     type: Date,
-    default: null
+    default: Date.now
   },
-  loginCount: {
-    type: Number,
-    default: 0,
-    min: 0
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  },
+  lastLoginAt: {
+    type: Date
   }
 }, {
   timestamps: true,
-  toJSON: {
-    transform: function(doc, ret) {
-      delete ret.__v;
-      return ret;
-    }
-  }
+  versionKey: false
 });
 
-// Instance Methods
-UserSchema.methods.updateLastLogin = async function(this: IUser): Promise<IUser> {
-  this.lastLogin = new Date();
-  this.loginCount += 1;
-  await this.save();
-  
-  logger.info('User login updated', {
-    uid: this.uid,
-    loginCount: this.loginCount,
-    lastLogin: this.lastLogin
-  });
-  
-  return this;
-};
+// Indexes for better performance
+userSchema.index({ uid: 1 });
+userSchema.index({ email: 1 });
+userSchema.index({ createdAt: -1 });
+userSchema.index({ profileImageFileId: 1 });
 
-UserSchema.methods.getProfile = function(this: IUser): IUserBase {
+// Pre-save middleware to update updatedAt
+userSchema.pre('save', function(next) {
+  if (this.isModified() && !this.isNew) {
+    this.updatedAt = new Date();
+  }
+  next();
+});
+
+// Pre-findOneAndUpdate middleware to update updatedAt
+userSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], function(next) {
+  this.set({ updatedAt: new Date() });
+  next();
+});
+
+// Virtual for profile image variants
+userSchema.virtual('profileImageVariants').get(function() {
+  if (!this.profileImage) return null;
+  
+  // This would ideally use the ProfileImageService, but virtuals can't be async
+  // So we'll provide basic variants here
+  return {
+    original: this.profileImage,
+    thumbnail: this.profileImageThumbnail || this.profileImage,
+    // Additional variants would be generated on-demand via the service
+  };
+});
+
+// Method to get full profile data including image variants
+userSchema.methods.getFullProfile = function() {
   return {
     uid: this.uid,
     name: this.name,
     email: this.email,
     location: this.location,
-    isActive: this.isActive,
-    lastLogin: this.lastLogin,
-    loginCount: this.loginCount,
+    profileImage: {
+      original: this.profileImage,
+      thumbnail: this.profileImageThumbnail,
+      alt: this.profileImageAlt,
+      caption: this.profileImageCaption,
+      fileId: this.profileImageFileId
+    },
     createdAt: this.createdAt,
-    updatedAt: this.updatedAt
+    updatedAt: this.updatedAt,
+    lastLoginAt: this.lastLoginAt
   };
 };
 
-// Static Methods
-UserSchema.statics.findByUid = function(this: UserModel, uid: string): Promise<IUser | null> {
-  return this.findOne({ uid, isActive: true });
+// Static method to find user with profile image
+userSchema.statics.findWithProfileImage = function(query: any) {
+  return this.find({
+    ...query,
+    profileImage: { $exists: true, $ne: null }
+  });
 };
 
-UserSchema.statics.findActiveUsers = function(this: UserModel): Promise<IUser[]> {
-  return this.find({ isActive: true }).select('-__v').sort({ name: 1 });
+// Static method to cleanup orphaned profile images
+userSchema.statics.getOrphanedProfileImages = function() {
+  return this.find({
+    profileImageFileId: { $exists: true, $ne: null },
+    profileImage: null
+  });
 };
 
-// Indexes
-UserSchema.index({ uid: 1 }, { unique: true });
-UserSchema.index({ email: 1 }, { sparse: true });
-UserSchema.index({ isActive: 1, lastLogin: -1 });
-
-// Pre-save middleware
-UserSchema.pre('save', function(next) {
-  if (this.isModified('name')) {
-    this.name = this.name.trim();
+// Transform output for JSON
+userSchema.set('toJSON', {
+  transform: function(doc, ret) {
+    // Don't expose internal profileImageFileId in API responses unless specifically requested
+    delete ret._id;
+    delete ret.__v;
+    
+    // Group profile image fields
+    if (ret.profileImage || ret.profileImageThumbnail) {
+      ret.profileImageData = {
+        original: ret.profileImage,
+        thumbnail: ret.profileImageThumbnail,
+        alt: ret.profileImageAlt,
+        caption: ret.profileImageCaption
+      };
+      
+      // Remove individual fields from root level
+      delete ret.profileImage;
+      delete ret.profileImageThumbnail;
+      delete ret.profileImageAlt;
+      delete ret.profileImageCaption;
+      delete ret.profileImageFileId;
+    }
+    
+    return ret;
   }
-  
-  if (this.isModified('email') && this.email) {
-    this.email = this.email.toLowerCase().trim();
-  }
-  
-  next();
 });
 
-export default mongoose.model<IUser, UserModel>('User', UserSchema);
+const User = mongoose.model<IUser>('User', userSchema);
+
+export default User;
+export { IUser };
