@@ -24,11 +24,8 @@ const uploadLimiter = rateLimit({
     retryAfter: 15 * 60
   },
   standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) => {
-    const user = (req as any).user;
-    return user ? `upload_${user.uid}` : req.ip || 'anonymous';
-  }
+  legacyHeaders: false
+  // Remove custom keyGenerator to use default IP-based limiting
 });
 
 // Rate limiting for image operations

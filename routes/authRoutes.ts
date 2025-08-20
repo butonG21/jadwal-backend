@@ -22,7 +22,14 @@ router.post('/login', login);
  * @desc    User logout
  * @access  Private
  */
-router.post('/logout', verifyToken, logout); // Fixed route path
+router.post('/logout', verifyToken, logout);
+
+/**
+ * @route   GET /api/v1/auth/logout
+ * @desc    User logout (alternative method)
+ * @access  Private
+ */
+router.get('/logout', verifyToken, logout);
 
 /**
  * @route   GET /api/v1/auth/verify

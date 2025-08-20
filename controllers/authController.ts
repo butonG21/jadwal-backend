@@ -50,11 +50,7 @@ class AuthController {
     },
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => {
-      // Rate limit by IP and username combination
-      const { username } = req.body;
-      return `${req.ip}-${username || 'unknown'}`;
-    },
+    // Remove custom keyGenerator to use default IP-based limiting
     skip: (req) => {
       // Skip rate limiting in development
       return process.env.NODE_ENV === 'development';
