@@ -20,7 +20,7 @@ export interface IAttendance extends Document {
   updatedAt: Date;
 }
 
-interface IAttendanceMethods {
+export interface IAttendanceMethods {
   hasCompleteAttendance(): boolean;
   getWorkingHours(): number | null;
   getBreakDuration(): number | null;

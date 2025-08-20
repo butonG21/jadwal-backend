@@ -1,6 +1,7 @@
-import Attendance from '../models/Attendance';
+import Attendance, { IAttendance, IAttendanceMethods } from '../models/Attendance';
 import { logger } from '../utils/loggers';
 import { AppError } from '../utils/errorTypes';
+import { Document } from 'mongoose';
 
 interface AttendanceData {
   userid: string;
@@ -21,7 +22,7 @@ interface AttendanceData {
 }
 
 export class AttendanceService {
-  async saveAttendanceData(attendanceData: AttendanceData) {
+  async saveAttendanceData(attendanceData: AttendanceData): Promise<IAttendance & IAttendanceMethods & Document> {
     try {
       const savedAttendance = await Attendance.findOneAndUpdate(
         { userid: attendanceData.userid, date: attendanceData.date },
@@ -52,7 +53,7 @@ export class AttendanceService {
     }
   }
 
-  async getAttendanceByUserId(userid: string, date?: string) {
+  async getAttendanceByUserId(userid: string, date?: string): Promise<(IAttendance & IAttendanceMethods & Document) | (IAttendance & IAttendanceMethods & Document)[] | null> {
     try {
       const query: any = { userid };
       if (date) {
@@ -73,7 +74,7 @@ export class AttendanceService {
     }
   }
 
-  async getAttendanceByDateRange(userid: string, startDate: string, endDate: string) {
+  async getAttendanceByDateRange(userid: string, startDate: string, endDate: string): Promise<(IAttendance & IAttendanceMethods & Document)[]> {
     try {
       const attendance = await Attendance.find({
         userid,
@@ -94,7 +95,7 @@ export class AttendanceService {
     }
   }
 
-  async deleteAttendanceData(userid: string, date: string) {
+  async deleteAttendanceData(userid: string, date: string): Promise<(IAttendance & IAttendanceMethods & Document) | null> {
     try {
       const result = await Attendance.findOneAndDelete({ userid, date });
       
@@ -103,7 +104,7 @@ export class AttendanceService {
       }
 
       logger.info(`Attendance data deleted for user ${userid} on ${date}`);
-      return result;
+      return result as unknown as (IAttendance & IAttendanceMethods & Document);
       
     } catch (error: any) {
       if (error instanceof AppError) {
