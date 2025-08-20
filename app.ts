@@ -226,10 +226,21 @@ class Application {
       endpoints: {
         auth: {
           login: 'POST /api/v1/auth/login',
-          logout: 'POST /api/v1/auth/logout'
+          logout: 'POST /api/v1/auth/logout',
+          verify: 'GET /api/v1/auth/verify',
+          status: 'GET /api/v1/auth/status'
         },
         users: {
-          profile: 'GET /api/v1/users/me'
+          profile: 'GET /api/v1/users/me',
+          update_profile: 'PUT /api/v1/users/me',
+          stats: 'GET /api/v1/users/me/stats'
+        },
+        profile_images: {
+          upload: 'POST /api/v1/users/profile/image/upload',
+          get: 'GET /api/v1/users/profile/image',
+          delete: 'DELETE /api/v1/users/profile/image',
+          update_meta: 'PUT /api/v1/users/profile/image/meta',
+          get_by_user: 'GET /api/v1/users/profile/image/user/:userId'
         },
         schedules: {
           upload: 'POST /api/v1/schedule/upload-excel',
@@ -253,7 +264,7 @@ class Application {
 
     res.status(200).json(apiInfo);
   }
-
+  
   private apiDocumentation(req: express.Request, res: express.Response): void {
     // This would ideally serve Swagger/OpenAPI documentation
     res.status(200).json({
