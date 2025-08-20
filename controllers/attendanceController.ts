@@ -1,20 +1,17 @@
-// controllers/fetchAttendance.ts
 import { Request, Response } from 'express';
-import axios from 'axios';
+import axios, { AxiosResponse } from 'axios';
 import Schedule from '../models/schedule';
 import Attendance from '../models/Attendance';
-import ImageKit from 'imagekit';
-
-// Constants
-const ATTENDANCE_API_BASE_URL = 'http://attendance-api.shabuhachi.id/service';
-const ATTENDANCE_API_ENDPOINT = `${ATTENDANCE_API_BASE_URL}/getTripReport1.php`;
-
-// ImageKit Configuration
-const imagekit = new ImageKit({
-  publicKey: process.env.IMAGEKIT_PUBLIC_KEY || '',
-  privateKey: process.env.IMAGEKIT_PRIVATE_KEY || '',
-  urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT || '',
-});
+import { logger } from '../utils/loggers';
+import { ApiResponse } from '../utils/apiResponse';
+import { DateHelper } from '../utils/dateHelper';
+import { asyncHandler } from '../utils/asyncHandler';
+import { AppError, NotFoundError, ExternalApiError } from '../utils/errorTypes';
+import { handleExternalApiError } from '../middlewares/errorHandler';
+import { ImageService } from '../services/imageService';
+import { AttendanceService } from '../services/attendanceService';
+import { cache } from '../utils/cache';
+import { API_ENDPOINTS, IMAGE_PROCESSING } from '../config/constants';
 
 // Types
 interface AttendanceApiResponse {
@@ -33,7 +30,7 @@ interface AttendanceApiResponse {
   mset_end_image?: string;
 }
 
-interface AttendanceData {
+interface ProcessedAttendanceData {
   userid: string;
   name: string;
   date: string;
@@ -51,719 +48,424 @@ interface AttendanceData {
   end_image?: string;
 }
 
-interface ImageUploadResult {
-  success: boolean;
-  url?: string;
-  error?: string;
-}
+class AttendanceController {
+  private imageService: ImageService;
+  private attendanceService: AttendanceService;
 
-// Helper functions
-function getCurrentDate(): string {
-  try {
-    // Force Indonesia timezone regardless of server timezone
-    const formatter = new Intl.DateTimeFormat('sv-SE', {
-      timeZone: 'Asia/Jakarta',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
-    });
+  constructor() {
+    this.imageService = new ImageService();
+    this.attendanceService = new AttendanceService();
+  }
 
-    const date = formatter.format(new Date());
-    
-    // Log untuk monitoring (bisa dilihat di Railway logs)
-    if (process.env.NODE_ENV !== 'production') {
-      console.log(`[TIMEZONE] Generated attendance date: ${date} (Asia/Jakarta)`);
-    }
-    
-    return date;
-  } catch (error) {
-    // Fallback method untuk Railway
-    console.warn('[TIMEZONE] Intl.DateTimeFormat failed, using manual calculation');
+  // Test timezone endpoint for Railway deployment
+  testRailwayTimezone = asyncHandler(async (req: Request, res: Response) => {
     const now = new Date();
-    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-    const indonesiaTime = new Date(utc + (7 * 3600000)); // UTC+7
-    
-    const year = indonesiaTime.getFullYear();
-    const month = String(indonesiaTime.getMonth() + 1).padStart(2, '0');
-    const day = String(indonesiaTime.getDate()).padStart(2, '0');
-    
-    const fallbackDate = `${year}-${month}-${day}`;
-    console.log(`[TIMEZONE] Fallback date: ${fallbackDate}`);
-    return fallbackDate;
-  }
-}
+    const indonesiaTime = DateHelper.getCurrentTimestampIndonesia();
+    const currentDate = DateHelper.getCurrentDateIndonesia();
 
-export async function testRailwayTimezone(req: Request, res: Response): Promise<void> {
-  const now = new Date();
-  
-  res.status(200).json({
-    message: 'Railway Timezone Test',
-    serverTime: now.toISOString(),
-    serverTimezone: process.env.TZ || 'Not Set',
-    detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    timezoneOffset: now.getTimezoneOffset(),
-    
-    dates: {
-      serverLocalDate: now.toLocaleDateString('sv-SE'),
-      indonesiaDate: getCurrentDate(),
-      utcDate: new Date(now.getTime()).toISOString().split('T')[0]
-    },
-    
-    times: {
-      serverTime: now.toString(),
-      indonesiaTime: new Intl.DateTimeFormat('id-ID', {
-        timeZone: 'Asia/Jakarta',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        timeZoneName: 'short'
-      }).format(now)
-    }
-  });
-}
-
-
-function formatDateString(date: string, month: string, year: string): string {
-  const paddedDate = String(date).padStart(2, '0');
-  const paddedMonth = String(month).padStart(2, '0');
-  return `${year}-${paddedMonth}-${paddedDate}`;
-}
-
-async function fetchAttendanceFromAPI(userId: string): Promise<AttendanceApiResponse> {
-  const formData = new URLSearchParams();
-  formData.append('userid', userId);
-
-  try {
-    const { data } = await axios.post(
-      ATTENDANCE_API_ENDPOINT,
-      formData.toString(),
-      {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        timeout: 10000,
+    const timezoneInfo = {
+      message: 'Railway Timezone Test',
+      serverTime: now.toISOString(),
+      serverTimezone: process.env.TZ || 'Not Set',
+      detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      timezoneOffset: now.getTimezoneOffset(),
+      dates: {
+        serverLocalDate: now.toLocaleDateString('sv-SE'),
+        indonesiaDate: currentDate,
+        utcDate: now.toISOString().split('T')[0]
+      },
+      times: {
+        serverTime: now.toString(),
+        indonesiaTime: indonesiaTime,
+        formattedIndonesiaTime: DateHelper.formatDate(now, 'YYYY-MM-DD HH:mm:ss')
       }
-    );
-    return data;
-  } catch (error) {
-    throw new Error(`Failed to fetch attendance data from API: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
-}
-
-// Image processing functions
-async function downloadImage(imageUrl: string): Promise<Buffer | null> {
-  if (!imageUrl || imageUrl.trim() === '') {
-    return null;
-  }
-
-  try {
-    const response = await axios.get(imageUrl, {
-      responseType: 'arraybuffer',
-      timeout: 30000, // 30 seconds timeout
-      maxContentLength: 10 * 1024 * 1024, // 10MB max
-    });
-
-    return Buffer.from(response.data);
-  } catch (error) {
-    console.error(`Failed to download image from ${imageUrl}:`, error instanceof Error ? error.message : error);
-    return null;
-  }
-}
-
-async function uploadToImageKit(
-  imageBuffer: Buffer, 
-  fileName: string, 
-  folderPath: string
-): Promise<ImageUploadResult> {
-  try {
-    const uploadResponse = await imagekit.upload({
-      file: imageBuffer,
-      fileName: fileName,
-      folder: folderPath,
-      useUniqueFileName: true,
-    });
-
-    return {
-      success: true,
-      url: uploadResponse.url,
     };
-  } catch (error) {
-    console.error(`Failed to upload to ImageKit:`, error instanceof Error ? error.message : error);
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Upload failed',
-    };
-  }
-}
 
-function generateFileName(userId: string, date: string, imageType: string): string {
-  const timestamp = Date.now();
-  const cleanDate = date.replace(/-/g, '');
-  return `${userId}_${cleanDate}_${imageType}_${timestamp}.jpg`;
-}
-
-function generateFolderPath(date: string): string {
-  const [year, month] = date.split('-');
-  return `/attendance/${year}/${month}`;
-}
-
-async function processImageUpload(
-  imageUrl: string | undefined,
-  userId: string,
-  date: string,
-  imageType: string
-): Promise<string | undefined> {
-  if (!imageUrl) {
-    return undefined;
-  }
-
-  try {
-    // Step 1: Download image
-    const imageBuffer = await downloadImage(imageUrl);
-    if (!imageBuffer) {
-      console.warn(`Failed to download ${imageType} image for user ${userId}`);
-      return imageUrl; // Return original URL as fallback
-    }
-
-    // Step 2: Upload to ImageKit
-    const fileName = generateFileName(userId, date, imageType);
-    const folderPath = generateFolderPath(date);
-    
-    const uploadResult = await uploadToImageKit(imageBuffer, fileName, folderPath);
-    
-    if (uploadResult.success && uploadResult.url) {
-      console.log(`Successfully uploaded ${imageType} image for user ${userId} to ImageKit`);
-      return uploadResult.url;
-    } else {
-      console.warn(`Failed to upload ${imageType} image for user ${userId}:`, uploadResult.error);
-      return imageUrl; // Return original URL as fallback
-    }
-  } catch (error) {
-    console.error(`Error processing ${imageType} image for user ${userId}:`, error instanceof Error ? error.message : error);
-    return imageUrl; // Return original URL as fallback
-  }
-}
-
-async function processAllImages(
-  apiData: AttendanceApiResponse,
-  userId: string,
-  date: string
-): Promise<{
-  start_image?: string;
-  break_out_image?: string;
-  break_in_image?: string;
-  end_image?: string;
-}> {
-  // Process all images concurrently with limit
-  const imageProcessPromises = [
-    { type: 'start', url: apiData.mset_start_image },
-    { type: 'break_out', url: apiData.mset_break_out_image },
-    { type: 'break_in', url: apiData.mset_break_in_image },
-    { type: 'end', url: apiData.mset_end_image },
-  ].map(async ({ type, url }) => {
-    const processedUrl = await processImageUpload(url, userId, date, type);
-    return { type, url: processedUrl };
+    res.status(200).json(ApiResponse.success('Timezone test completed', timezoneInfo));
   });
 
-  const results = await Promise.allSettled(imageProcessPromises);
+  // Fetch attendance data from external API
+  private async fetchAttendanceFromAPI(userId: string): Promise<AttendanceApiResponse> {
+    const cacheKey = `attendance_api_${userId}_${DateHelper.getCurrentDateIndonesia()}`;
+    const cached = cache.get<AttendanceApiResponse>(cacheKey);
+    if (cached) {
+      logger.info(`Cache hit for attendance data: ${userId}`);
+      return cached;
+    }
   
-  const processedImages: any = {};
-  results.forEach((result, index) => {
-    const imageType = ['start', 'break_out', 'break_in', 'end'][index];
-    if (result.status === 'fulfilled' && result.value.url) {
-      processedImages[`${imageType}_image`] = result.value.url;
+    const formData = new URLSearchParams();
+    formData.append('userid', userId);
+  
+    let attempts = 0;
+    const maxRetries = 3;
+    const url = `${API_ENDPOINTS.ATTENDANCE_API_BASE}/${API_ENDPOINTS.ATTENDANCE_GET_TRIP_REPORT}`;
+  
+    while (attempts < maxRetries) {
+      try {
+        const response: AxiosResponse = await axios.post(
+          url,
+          formData.toString(),
+          {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            timeout: 15000,
+          }
+        );
+  
+        const data = response.data as AttendanceApiResponse;
+        if (data.success) {
+          cache.set(cacheKey, data, 300);
+        }
+        return data;
+      } catch (error: any) {
+        attempts++;
+        logger.warn(`Attempt ${attempts} failed for user ${userId}: ${error.message}`);
+        if (attempts >= maxRetries) {
+          logger.error(`Failed to fetch attendance after ${maxRetries} attempts`, {
+            error: error.message,
+            status: error.response?.status,
+            data: error.response?.data
+          });
+          throw handleExternalApiError(error, 'Attendance API');
+        }
+        await new Promise(res => setTimeout(res, 1000)); // delay sebelum retry
+      }
     }
-  });
+  
+    throw new AppError('Unexpected error in fetchAttendanceFromAPI', 500);
+  }
+  // Process and save attendance data
+  private async processAttendanceData(
+    userId: string,
+    scheduleName: string,
+    apiData: AttendanceApiResponse,
+    date: string
+  ): Promise<ProcessedAttendanceData> {
+    try {
+      // Process images in parallel
+      const imageProcessingPromises = [
+        { type: 'start', url: apiData.mset_start_image },
+        { type: 'break_out', url: apiData.mset_break_out_image },
+        { type: 'break_in', url: apiData.mset_break_in_image },
+        { type: 'end', url: apiData.mset_end_image },
+      ].map(async ({ type, url }) => {
+        if (!url) return { type, url: undefined };
+        
+        try {
+          const processedUrl = await this.imageService.processAndUploadImage(
+            url,
+            userId,
+            date,
+            type
+          );
+          return { type, url: processedUrl };
+        } catch (error) {
+          logger.warn(`Failed to process ${type} image for user ${userId}:`, error);
+          return { type, url }; // Return original URL as fallback
+        }
+      });
 
-  return processedImages;
-}
+      const imageResults = await Promise.allSettled(imageProcessingPromises);
+      const processedImages: Record<string, string | undefined> = {};
 
-function createAttendanceData(
-  userId: string, 
-  scheduleName: string, 
-  apiData: AttendanceApiResponse, 
-  date: string,
-  processedImages: any
-): AttendanceData {
-  return {
-    userid: userId,
-    name: scheduleName,
-    date: date,
-    start_time: apiData.mset_start_time,
-    start_address: apiData.mset_start_address,
-    start_image: processedImages.start_image || apiData.mset_start_image,
-    break_out_time: apiData.mset_break_out_time,
-    break_out_address: apiData.mset_break_out_address,
-    break_out_image: processedImages.break_out_image || apiData.mset_break_out_image,
-    break_in_time: apiData.mset_break_in_time,
-    break_in_address: apiData.mset_break_in_address,
-    break_in_image: processedImages.break_in_image || apiData.mset_break_in_image,
-    end_time: apiData.mset_end_time,
-    end_address: apiData.mset_end_address,
-    end_image: processedImages.end_image || apiData.mset_end_image,
-  };
-}
+      imageResults.forEach((result, index) => {
+        if (result.status === 'fulfilled' && result.value.url) {
+          const imageType = ['start', 'break_out', 'break_in', 'end'][index];
+          processedImages[`${imageType}_image`] = result.value.url;
+        }
+      });
 
-async function saveAttendanceData(attendanceData: AttendanceData): Promise<void> {
-  await Attendance.findOneAndUpdate(
-    { userid: attendanceData.userid, date: attendanceData.date },
-    attendanceData,
-    { upsert: true, new: true }
-  );
-}
+      const attendanceData: ProcessedAttendanceData = {
+        userid: userId,
+        name: scheduleName,
+        date: date,
+        start_time: apiData.mset_start_time,
+        start_address: apiData.mset_start_address,
+        start_image: processedImages.start_image || apiData.mset_start_image,
+        break_out_time: apiData.mset_break_out_time,
+        break_out_address: apiData.mset_break_out_address,
+        break_out_image: processedImages.break_out_image || apiData.mset_break_out_image,
+        break_in_time: apiData.mset_break_in_time,
+        break_in_address: apiData.mset_break_in_address,
+        break_in_image: processedImages.break_in_image || apiData.mset_break_in_image,
+        end_time: apiData.mset_end_time,
+        end_address: apiData.mset_end_address,
+        end_image: processedImages.end_image || apiData.mset_end_image,
+      };
 
-// Main controller functions
-export async function fetchAttendance(req: Request, res: Response): Promise<void> {
-  try {
-    const schedules = await Schedule.find({ employee_id: { $ne: null } });
+      return attendanceData;
+      
+    } catch (error) {
+      logger.error(`Failed to process attendance data for user ${userId}:`, error);
+      throw new AppError('Failed to process attendance data', 500);
+    }
+  }
+
+  // Main method to fetch attendance for all employees
+  fetchAttendance = asyncHandler(async (req: Request, res: Response) => {
+    const requestId = (req as any).requestId;
+    logger.info(`Starting bulk attendance fetch process`, { requestId });
+
+    const schedules = await Schedule.find({ 
+      employee_id: { $ne: null, $exists: true } 
+    });
     
     if (schedules.length === 0) {
-      res.status(200).json({
-        message: 'No schedules found with employee IDs.',
-        success: 0,
-        failed: 0,
-      });
-      return;
+      return res.status(200).json(
+        ApiResponse.success('No schedules found with employee IDs', {
+          processed: 0,
+          success: 0,
+          failed: 0,
+          total: 0
+        })
+      );
     }
 
+    const attendanceDate = DateHelper.getCurrentDateIndonesia();
+    const batchSize = IMAGE_PROCESSING.BATCH_SIZE;
+    
     let successCount = 0;
     let failCount = 0;
-    const attendanceDate = getCurrentDate();
+    const results: Array<{ userId: string; status: 'success' | 'failed'; error?: string }> = [];
 
-    // Process schedules in smaller batches to avoid overwhelming external services
-    const batchSize = 3; // Reduced batch size due to image processing
+    // Process in batches to avoid overwhelming external services
     for (let i = 0; i < schedules.length; i += batchSize) {
       const batch = schedules.slice(i, i + batchSize);
       
-      await Promise.allSettled(
-        batch.map(async (schedule) => {
-          const userId = schedule.employee_id;
-          if (!userId) return;
+      logger.info(`Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(schedules.length / batchSize)}`, {
+        requestId,
+        batchSize: batch.length
+      });
 
-          try {
-            console.log(`Processing attendance for user ${userId}...`);
-            
-            // Step 1: Fetch attendance data
-            const apiData = await fetchAttendanceFromAPI(userId);
+      const batchPromises = batch.map(async (schedule) => {
+        const userId = schedule.employee_id;
+        if (!userId) return { userId: 'unknown', status: 'failed' as const, error: 'Missing employee ID' };
 
-            if (apiData.success) {
-              // Step 2: Process all images
-              const processedImages = await processAllImages(apiData, userId, attendanceDate);
-              
-              // Step 3: Create attendance data with processed images
-              const attendanceData = createAttendanceData(
-                userId, 
-                schedule.name, 
-                apiData, 
-                attendanceDate,
-                processedImages
-              );
-              
-              // Step 4: Save to database
-              await saveAttendanceData(attendanceData);
-              
-              console.log(`Successfully processed attendance for user ${userId}`);
-              successCount++;
-            } else {
-              console.warn(`API returned success: false for user ${userId}`);
-              failCount++;
-            }
-          } catch (error) {
-            console.error(`Failed to process attendance for user ${userId}:`, error instanceof Error ? error.message : error);
+        try {
+          const apiData = await this.fetchAttendanceFromAPI(userId);
+
+          if (!apiData.success) {
+            return { userId, status: 'failed' as const, error: 'API returned unsuccessful response' };
+          }
+
+          const attendanceData = await this.processAttendanceData(
+            userId,
+            schedule.name,
+            apiData,
+            attendanceDate
+          );
+
+          await this.attendanceService.saveAttendanceData(attendanceData);
+          
+          logger.info(`Successfully processed attendance for user ${userId}`, { requestId });
+          return { userId, status: 'success' as const };
+
+        } catch (error: any) {
+          logger.error(`Failed to process attendance for user ${userId}:`, {
+            error: error.message,
+            requestId
+          });
+          return { userId, status: 'failed' as const, error: error.message };
+        }
+      });
+
+      const batchResults = await Promise.allSettled(batchPromises);
+      
+      batchResults.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          const { status } = result.value;
+          if (status === 'success') {
+            successCount++;
+          } else {
             failCount++;
           }
-        })
-      );
+          results.push(result.value);
+        } else {
+          failCount++;
+          results.push({ userId: 'unknown', status: 'failed', error: result.reason?.message });
+        }
+      });
 
-      // Add small delay between batches to avoid rate limiting
+      // Add delay between batches
       if (i + batchSize < schedules.length) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
     }
 
-    res.status(200).json({
-      message: 'Attendance fetch process completed.',
+    // Clear cache after bulk operation
+    cache.flush();
+
+    const responseData = {
+      processed: schedules.length,
       success: successCount,
       failed: failCount,
       total: schedules.length,
-    });
-  } catch (error) {
-    console.error('Error in fetchAttendance:', error instanceof Error ? error.message : error);
-    res.status(500).json({ 
-      error: 'Internal server error occurred while fetching attendance data.' 
-    });
-  }
-}
-
-// Update fetchAttendanceByUser dengan logging yang lebih baik
-export async function fetchAttendanceByUser(req: Request, res: Response): Promise<void> {
-  try {
-    const { employeeId } = req.params;
-
-    if (!employeeId) {
-      res.status(400).json({ error: 'Employee ID is required.' });
-      return;
-    }
-
-    const schedule = await Schedule.findOne({ employee_id: employeeId });
-
-    if (!schedule) {
-      res.status(404).json({ error: 'Employee not found in schedule.' });
-      return;
-    }
-
-    const attendanceDate = getCurrentDate();
-    console.log(`[${employeeId}] Processing attendance for date: ${attendanceDate}`);
-    
-    const apiData = await fetchAttendanceFromAPI(employeeId);
-
-    if (!apiData.success) {
-      res.status(400).json({ error: 'Attendance API returned unsuccessful response.' });
-      return;
-    }
-    
-    // Process images
-    const processedImages = await processAllImages(apiData, employeeId, attendanceDate);
-    
-    // Create attendance data with processed images
-    const attendanceData = createAttendanceData(
-      employeeId, 
-      schedule.name, 
-      apiData, 
-      attendanceDate,
-      processedImages
-    );
-
-    // Log before saving for debugging
-    console.log(`[${employeeId}] Saving to database:`, {
-      userid: attendanceData.userid,
-      date: attendanceData.date,
-      hasStartTime: !!attendanceData.start_time,
-      hasEndTime: !!attendanceData.end_time
-    });
-
-    const savedAttendance = await Attendance.findOneAndUpdate(
-      { userid: employeeId, date: attendanceDate },
-      attendanceData,
-      { upsert: true, new: true }
-    );
-
-    console.log(`[${employeeId}] Successfully saved attendance for ${attendanceDate}`);
-
-    res.status(200).json({ 
-      message: 'Attendance data fetched and saved successfully.', 
-      data: savedAttendance,
-      meta: {
-        processedDate: attendanceDate,
-        serverTime: new Date().toISOString(),
-        timezone: 'Asia/Jakarta (forced)'
-      }
-    });
-  } catch (error) {
-    console.error(`Error in fetchAttendanceByUser:`, error instanceof Error ? error.message : error);
-    res.status(500).json({ error: 'Internal server error occurred while fetching user attendance.' });
-  }
-}
-
-// New endpoint for migrating existing images to ImageKit
-export async function migrateExistingImages(req: Request, res: Response): Promise<void> {
-  try {
-    const { limit = 50, skip = 0, forceUpdate = false } = req.query;
-    
-    // Parse query parameters
-    const limitNum = parseInt(limit as string, 10) || 50;
-    const skipNum = parseInt(skip as string, 10) || 0;
-    const shouldForceUpdate = forceUpdate === 'true';
-
-    console.log(`Starting image migration process. Limit: ${limitNum}, Skip: ${skipNum}, Force Update: ${shouldForceUpdate}`);
-
-    // Find attendance records that have image URLs
-    const query: any = {
-      $or: [
-        { start_image: { $exists: true, $nin: [null, ''] } },
-        { break_out_image: { $exists: true, $nin: [null, ''] } },
-        { break_in_image: { $exists: true, $nin: [null, ''] } },
-        { end_image: { $exists: true, $nin: [null, ''] } }
-      ]
+      date: attendanceDate,
+      results: results.slice(0, 10), // Show first 10 results to avoid large response
+      hasMoreResults: results.length > 10
     };
 
-    // If not force update, only migrate images that are not from ImageKit
-    if (!shouldForceUpdate) {
-      query.$or = [
-        { start_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } },
-        { break_out_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } },
-        { break_in_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } },
-        { end_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } }
-      ];
+    logger.info('Bulk attendance fetch completed', { 
+      requestId, 
+      ...responseData 
+    });
+
+    res.status(200).json(
+      ApiResponse.success('Attendance fetch process completed', responseData)
+    );
+  });
+
+  // Fetch attendance for a specific user
+  fetchAttendanceByUser = asyncHandler(async (req: Request, res: Response) => {
+    const { employeeId } = req.params;
+    const requestId = (req as any).requestId;
+
+    if (!employeeId) {
+      throw new AppError('Employee ID is required', 400);
     }
 
-    const totalRecords = await Attendance.countDocuments(query);
-    const attendanceRecords = await Attendance.find(query)
-      .limit(limitNum)
-      .skip(skipNum)
-      .sort({ date: -1 }); // Process newest first
+    logger.info(`Fetching attendance for user ${employeeId}`, { requestId });
 
-    if (attendanceRecords.length === 0) {
-      res.status(200).json({
-        message: 'No records found for migration.',
-        totalRecords,
-        processed: 0,
-        success: 0,
-        failed: 0,
-        hasMore: false
+    const schedule = await Schedule.findOne({ employee_id: employeeId });
+    if (!schedule) {
+      throw new NotFoundError(`Employee ${employeeId} not found in schedule`);
+    }
+
+    const attendanceDate = DateHelper.getCurrentDateIndonesia();
+    
+    try {
+      const apiData = await this.fetchAttendanceFromAPI(employeeId);
+
+      if (!apiData.success) {
+        throw new ExternalApiError('Attendance API returned unsuccessful response');
+      }
+
+      const attendanceData = await this.processAttendanceData(
+        employeeId,
+        schedule.name,
+        apiData,
+        attendanceDate
+      );
+
+      const savedAttendance = await this.attendanceService.saveAttendanceData(attendanceData);
+
+      logger.info(`Successfully processed attendance for user ${employeeId}`, { 
+        requestId, 
+        date: attendanceDate 
       });
-      return;
-    }
 
-    let successCount = 0;
-    let failCount = 0;
-    const migrationResults: Array<{
-      userid: string;
-      date: string;
-      images: { [key: string]: { original: string; migrated?: string; error?: string } } | { error: string };
-    }> = [];
-
-    // Process records in smaller batches
-    const batchSize = 5;
-    for (let i = 0; i < attendanceRecords.length; i += batchSize) {
-      const batch = attendanceRecords.slice(i, i + batchSize);
-
-      await Promise.allSettled(
-        batch.map(async (record) => {
-          try {
-            const migrationResult = {
-              userid: record.userid,
-              date: record.date,
-              images: {} as any
-            };
-
-            const imageFields = ['start_image', 'break_out_image', 'break_in_image', 'end_image'];
-            const updateData: any = {};
-            let hasUpdates = false;
-
-            // Process each image field
-            for (const imageField of imageFields) {
-              const originalUrl = record[imageField as keyof typeof record] as string;
-              
-              if (originalUrl && originalUrl.trim() !== '') {
-                // Skip if already from ImageKit and not forcing update
-                if (!shouldForceUpdate && originalUrl.includes('imagekit.io')) {
-                  migrationResult.images[imageField] = {
-                    original: originalUrl,
-                    migrated: originalUrl,
-                    error: 'Already migrated (skipped)'
-                  };
-                  continue;
-                }
-
-                const imageType = imageField.replace('_image', '');
-                const migratedUrl = await processImageUpload(
-                  originalUrl,
-                  record.userid,
-                  record.date,
-                  imageType
-                );
-
-                migrationResult.images[imageField] = {
-                  original: originalUrl,
-                  migrated: migratedUrl
-                };
-
-                // Only update if the URL actually changed
-                if (migratedUrl && migratedUrl !== originalUrl) {
-                  updateData[imageField] = migratedUrl;
-                  hasUpdates = true;
-                }
-              }
-            }
-
-            // Update database if there are changes
-            if (hasUpdates) {
-              await Attendance.findByIdAndUpdate(record._id, updateData);
-              console.log(`Migrated images for user ${record.userid} on ${record.date}`);
-            }
-
-            migrationResults.push(migrationResult);
-            successCount++;
-
-          } catch (error) {
-            console.error(`Failed to migrate images for user ${record.userid}:`, error instanceof Error ? error.message : error);
-            migrationResults.push({
-              userid: record.userid,
-              date: record.date,
-              images: { error: error instanceof Error ? error.message : 'Unknown error' }
-            });
-            failCount++;
+      res.status(200).json(
+        ApiResponse.success('Attendance data fetched and saved successfully', {
+          attendance: savedAttendance,
+          meta: {
+            processedDate: attendanceDate,
+            serverTime: new Date().toISOString(),
+            timezone: 'Asia/Jakarta'
           }
         })
       );
 
-      // Add delay between batches
-      if (i + batchSize < attendanceRecords.length) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
+    } catch (error: any) {
+      if (error instanceof AppError) {
+        throw error;
       }
-
-      // Log progress
-      console.log(`Processed batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(attendanceRecords.length / batchSize)}`);
+      
+      logger.error(`Failed to fetch attendance for user ${employeeId}:`, {
+        error: error.message,
+        requestId
+      });
+      
+      throw new AppError('Failed to fetch user attendance', 500);
     }
+  });
 
-    const hasMore = skipNum + limitNum < totalRecords;
-
-    res.status(200).json({
-      message: 'Image migration process completed.',
-      totalRecords,
-      processed: attendanceRecords.length,
-      success: successCount,
-      failed: failCount,
-      hasMore,
-      nextSkip: hasMore ? skipNum + limitNum : null,
-      results: migrationResults
-    });
-
-  } catch (error) {
-    console.error('Error in migrateExistingImages:', error instanceof Error ? error.message : error);
-    res.status(500).json({
-      error: 'Internal server error occurred while migrating images.'
-    });
-  }
-}
-
-// New endpoint for getting migration statistics
-export async function getMigrationStats(req: Request, res: Response): Promise<void> {
-  try {
-    // Count total records with images
-    const totalWithImages = await Attendance.countDocuments({
-      $or: [
-        { start_image: { $exists: true, $nin: [null, ''] } },
-        { break_out_image: { $exists: true, $nin: [null, ''] } },
-        { break_in_image: { $exists: true, $nin: [null, ''] } },
-        { end_image: { $exists: true, $nin: [null, ''] } }
-      ]
-    });
-
-    // Count records with ImageKit URLs (already migrated)
-    const alreadyMigrated = await Attendance.countDocuments({
-      $or: [
-        { start_image: /imagekit\.io/i },
-        { break_out_image: /imagekit\.io/i },
-        { break_in_image: /imagekit\.io/i },
-        { end_image: /imagekit\.io/i }
-      ]
-    });
-
-    // Count records that need migration
-    const needMigration = await Attendance.countDocuments({
-      $or: [
-        { start_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } },
-        { break_out_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } },
-        { break_in_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } },
-        { end_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } }
-      ]
-    });
-
-    // Get sample of URLs that need migration
-    const sampleRecords = await Attendance.find({
-      $or: [
-        { start_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } },
-        { break_out_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } },
-        { break_in_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } },
-        { end_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } }
-      ]
-    })
-    .limit(5)
-    .select('userid date start_image break_out_image break_in_image end_image');
-
-    res.status(200).json({
-      message: 'Migration statistics retrieved successfully.',
-      stats: {
-        totalWithImages,
-        alreadyMigrated,
-        needMigration,
-        migrationProgress: totalWithImages > 0 ? ((alreadyMigrated / totalWithImages) * 100).toFixed(2) + '%' : '0%'
-      },
-      sampleRecords: sampleRecords.map(record => ({
-        userid: record.userid,
-        date: record.date,
-        imageUrls: {
-          start_image: record.start_image,
-          break_out_image: record.break_out_image,
-          break_in_image: record.break_in_image,
-          end_image: record.end_image
-        }
-      }))
-    });
-
-  } catch (error) {
-    console.error('Error in getMigrationStats:', error instanceof Error ? error.message : error);
-    res.status(500).json({
-      error: 'Internal server error occurred while fetching migration stats.'
-    });
-  }
-}
-
-// Keep the existing getAttendanceByFilter function unchanged
-export async function getAttendanceByFilter(req: Request, res: Response): Promise<void> {
-  try {
+  // Get attendance by filter (date, month, year)
+  getAttendanceByFilter = asyncHandler(async (req: Request, res: Response) => {
     const { employeeId } = req.params;
     const { date, month, year } = req.query;
 
     if (!employeeId || !date || !month || !year) {
-      res.status(400).json({ 
-        error: 'Missing required parameters. Please provide employeeId, date, month, and year.' 
-      });
-      return;
+      throw new AppError('Missing required parameters: employeeId, date, month, and year', 400);
     }
 
-    if (typeof date !== 'string' || typeof month !== 'string' || typeof year !== 'string') {
-      res.status(400).json({ 
-        error: 'Invalid parameter types. Date, month, and year must be strings.' 
-      });
-      return;
+    // Validate date format
+    const dateString = `${year}-${String(month).padStart(2, '0')}-${String(date).padStart(2, '0')}`;
+    
+    if (!DateHelper.isValidDate(dateString)) {
+      throw new AppError('Invalid date format', 400);
     }
 
-    const dateNum = parseInt(date, 10);
-    const monthNum = parseInt(month, 10);
-    const yearNum = parseInt(year, 10);
-
-    if (isNaN(dateNum) || isNaN(monthNum) || isNaN(yearNum)) {
-      res.status(400).json({ 
-        error: 'Invalid date values. Please provide numeric values for date, month, and year.' 
-      });
-      return;
+    const cacheKey = `attendance_${employeeId}_${dateString}`;
+    const cached = cache.get(cacheKey);
+    
+    if (cached) {
+      return res.status(200).json(
+        ApiResponse.success('Attendance record retrieved successfully (cached)', cached)
+      );
     }
-
-    if (dateNum < 1 || dateNum > 31 || monthNum < 1 || monthNum > 12 || yearNum < 1900) {
-      res.status(400).json({ 
-        error: 'Date values out of range. Please provide valid date, month, and year.' 
-      });
-      return;
-    }
-
-    const filterDate = formatDateString(date, month, year);
 
     const attendance = await Attendance.findOne({
       userid: employeeId,
-      date: filterDate
+      date: dateString
     });
 
     if (!attendance) {
-      res.status(404).json({ 
-        message: `No attendance record found for employee ${employeeId} on ${filterDate}.` 
-      });
-      return;
+      throw new NotFoundError(
+        `No attendance record found for employee ${employeeId} on ${dateString}`
+      );
     }
 
-    res.status(200).json({
-      message: 'Attendance record retrieved successfully.',
-      data: attendance
+    // Cache the result for 5 minutes
+    cache.set(cacheKey, attendance, 300);
+
+    res.status(200).json(
+      ApiResponse.success('Attendance record retrieved successfully', attendance)
+    );
+  });
+
+  // Migration endpoints
+  migrateExistingImages = asyncHandler(async (req: Request, res: Response) => {
+    const { limit = 50, skip = 0, forceUpdate = false } = req.query;
+    const requestId = (req as any).requestId;
+    
+    const limitNum = parseInt(limit as string, 10) || 50;
+    const skipNum = parseInt(skip as string, 10) || 0;
+    const shouldForceUpdate = forceUpdate === 'true';
+
+    logger.info('Starting image migration process', {
+      requestId,
+      limit: limitNum,
+      skip: skipNum,
+      forceUpdate: shouldForceUpdate
     });
-  } catch (error) {
-    console.error('Error in getAttendanceByFilter:', error instanceof Error ? error.message : error);
-    res.status(500).json({ 
-      error: 'Internal server error occurred while retrieving attendance data.' 
-    });
-  }
+
+    const result = await this.imageService.migrateExistingImages(
+      limitNum,
+      skipNum,
+      shouldForceUpdate
+    );
+
+    res.status(200).json(
+      ApiResponse.success('Image migration process completed', result)
+    );
+  });
+
+  getMigrationStats = asyncHandler(async (req: Request, res: Response) => {
+    const stats = await this.imageService.getMigrationStatistics();
+    
+    res.status(200).json(
+      ApiResponse.success('Migration statistics retrieved successfully', stats)
+    );
+  });
 }
+
+// Export controller instance
+const attendanceController = new AttendanceController();
+
+export const {
+  testRailwayTimezone,
+  fetchAttendance,
+  fetchAttendanceByUser,
+  getAttendanceByFilter,
+  migrateExistingImages,
+  getMigrationStats
+} = attendanceController;
