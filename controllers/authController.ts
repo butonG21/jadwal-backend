@@ -176,8 +176,8 @@ class AuthController {
       throw new AppError('Username must be between 3 and 50 characters', 400);
     }
 
-    if (password.length < 6) {
-      throw new AppError('Password must be at least 6 characters', 400);
+    if (password.length < 1) {
+      throw new AppError('Password must be at least 1 characters', 400);
     }
 
     logger.info('Login attempt', { username, requestId, ip: req.ip });
