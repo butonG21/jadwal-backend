@@ -32,7 +32,7 @@ export const validationSchemas = {
 
   login: Joi.object({
     username: Joi.string().trim().min(3).max(50).required(),
-    password: Joi.string().min(6).max(100).required()
+    password: Joi.string().min(1).max(100).required()
   }),
 
   attendanceFilter: Joi.object({
