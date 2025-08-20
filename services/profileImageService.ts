@@ -113,23 +113,28 @@ export class ProfileImageService {
 
   private async deleteExistingProfileImage(userId: string): Promise<boolean> {
     try {
-      // Search for existing profile images
       const existingImages = await this.imagekit.listFiles({
         tags: userId,
         path: '/profiles',
         limit: 10
-      });
-
+      }) as any[]; // Type assertion to avoid TypeScript issues
+  
       if (existingImages.length > 0) {
-        // Delete all existing profile images for this user
-        const deletePromises = existingImages.map(image => 
-          this.imagekit.deleteFile(image.fileId)
+        // Filter only files that have fileId property
+        const imageFiles = existingImages.filter((item: any) => 
+          item && typeof item === 'object' && 'fileId' in item && item.fileId
         );
         
-        await Promise.allSettled(deletePromises);
-        logger.info(`Deleted ${existingImages.length} existing profile images for user ${userId}`);
+        if (imageFiles.length > 0) {
+          const deletePromises = imageFiles.map((image: any) => 
+            this.imagekit.deleteFile(image.fileId)
+          );
+          
+          await Promise.allSettled(deletePromises);
+          logger.info(`Deleted ${imageFiles.length} existing profile images for user ${userId}`);
+        }
       }
-
+  
       return true;
     } catch (error: any) {
       logger.warn('Could not delete existing profile images:', {
