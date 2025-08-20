@@ -4,7 +4,7 @@
     "module": "commonjs",
     "lib": ["es2018"],
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": "./",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -26,6 +26,7 @@
     "noImplicitAny": false
   },
   "include": [
+    "**/*.ts",
     "src/**/*",
     "src/types/**/*"
   ],

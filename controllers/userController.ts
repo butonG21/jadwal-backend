@@ -54,7 +54,12 @@ class UserController {
       });
 
       // Prepare profile image data
-      let profileImageData = null;
+      let profileImageData: null | {
+        original: string;
+        thumbnail: string;
+        small: string;
+        medium: string;
+      } = null;
       if (dbUser?.profileImage) {
         try {
           profileImageData = await this.profileImageService.generateProfileImageVariants(

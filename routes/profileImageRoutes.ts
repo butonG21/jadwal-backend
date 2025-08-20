@@ -27,7 +27,7 @@ const uploadLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) => {
     const user = (req as any).user;
-    return user ? `upload_${user.uid}` : req.ip;
+    return user ? `upload_${user.uid}` : req.ip || 'anonymous';
   }
 });
 

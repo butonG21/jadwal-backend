@@ -27,12 +27,29 @@ A robust, scalable Node.js/Express backend API for employee scheduling and atten
 - **Health Checks**: Comprehensive system monitoring endpoints
 - **Request Tracing**: Request ID tracking for debugging
 
+### Profile Image Management
+- **ImageKit Integration**: Cloud-based image processing and CDN delivery
+- **Multiple Image Variants**: Automatic generation of thumbnail, small, medium, and original sizes
+- **Image Optimization**: Automatic format conversion and quality optimization
+- **Secure Upload**: Rate-limited uploads with file type and size validation
+- **Metadata Management**: Support for alt text and captions
+
 ## 📋 Prerequisites
 
-- **Node.js** >= 16.x
-- **MongoDB** >= 4.4
-- **npm** or **yarn**
-- **ImageKit Account** (for image storage)
+Before running this application, make sure you have the following installed:
+
+- **Node.js** (v18.0.0 or higher)
+- **npm** (v8.0.0 or higher)
+- **MongoDB** (v5.0 or higher)
+- **Redis** (v6.0 or higher) - for caching
+- **Git** - for version control
+
+### External Services
+
+- **ImageKit Account** - for profile image processing and CDN delivery
+  - Sign up at [ImageKit.io](https://imagekit.io)
+  - Get your Public Key, Private Key, and URL Endpoint
+  - Configure the environment variables accordingly
 
 ## 🔧 Environment Variables
 
@@ -58,6 +75,12 @@ ATTENDANCE_API_URL=http://attendance-api.shabuhachi.id/service
 IMAGEKIT_PUBLIC_KEY=your_imagekit_public_key
 IMAGEKIT_PRIVATE_KEY=your_imagekit_private_key
 IMAGEKIT_URL_ENDPOINT=https://ik.imagekit.io/your_imagekit_id
+
+# Profile Image Configuration
+MAX_FILE_SIZE=10485760
+ALLOWED_FILE_TYPES=image/jpeg,image/png,image/webp
+UPLOAD_RATE_LIMIT_WINDOW=900000
+UPLOAD_RATE_LIMIT_MAX=5
 
 # CORS Configuration (production)
 CORS_ORIGINS=https://yourapp.com,https://www.yourapp.com
@@ -186,10 +209,121 @@ Authorization: Bearer <token>
     "position": "Staff",
     "email": "john@example.com",
     "location": "Jakarta",
-    "schedule": [...]
+    "profileImage": {
+      "original": "https://ik.imagekit.io/your_imagekit_id/profiles/profile_user123_1704067200000.jpg",
+      "thumbnail": "https://ik.imagekit.io/your_imagekit_id/profiles/profile_user123_1704067200000.jpg?tr=w-150,h-150,c-maintain_ratio,q-80",
+      "small": "https://ik.imagekit.io/your_imagekit_id/profiles/profile_user123_1704067200000.jpg?tr=w-300,h-300,c-maintain_ratio,q-80",
+      "medium": "https://ik.imagekit.io/your_imagekit_id/profiles/profile_user123_1704067200000.jpg?tr=w-600,h-600,c-maintain_ratio,q-80"
+    },
+    "schedule": [...],
+    "metadata": {
+      "totalScheduledDays": 22,
+      "lastLoginAt": "2025-01-15T10:30:00.000Z",
+      "accountCreatedAt": "2025-01-01T00:00:00.000Z",
+      "profileUpdatedAt": "2025-01-15T10:30:00.000Z"
+    }
   }
 }
 ```
+
+### Update User Profile
+```http
+PUT /api/v1/users/me
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{
+  "name": "John Smith",
+  "email": "johnsmith@example.com",
+  "location": "Bandung"
+}
+```
+
+### Get User Statistics
+```http
+GET /api/v1/users/me/stats
+Authorization: Bearer <token>
+```
+
+## 🖼️ Profile Image Management
+
+### Upload Profile Image
+```http
+POST /api/v1/users/profile/image/upload
+Content-Type: multipart/form-data
+Authorization: Bearer <token>
+
+Form Data:
+- profileImage: <image-file> (JPEG, PNG, WebP, max 10MB)
+```
+
+**Rate Limit:** 5 uploads per 15 minutes per user
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Profile image uploaded successfully",
+  "data": {
+    "user": {
+      "uid": "user123",
+      "name": "John Doe",
+      "profileImage": "https://ik.imagekit.io/your_imagekit_id/profiles/profile_user123_1704067200000.jpg",
+      "profileImageThumbnail": "https://ik.imagekit.io/your_imagekit_id/profiles/profile_user123_1704067200000.jpg?tr=w-150,h-150,c-maintain_ratio,q-80,f-webp"
+    },
+    "imageVariants": {
+      "original": "https://ik.imagekit.io/your_imagekit_id/profiles/profile_user123_1704067200000.jpg",
+      "thumbnail": "https://ik.imagekit.io/your_imagekit_id/profiles/profile_user123_1704067200000.jpg?tr=w-150,h-150,c-maintain_ratio,q-80",
+      "small": "https://ik.imagekit.io/your_imagekit_id/profiles/profile_user123_1704067200000.jpg?tr=w-300,h-300,c-maintain_ratio,q-80",
+      "medium": "https://ik.imagekit.io/your_imagekit_id/profiles/profile_user123_1704067200000.jpg?tr=w-600,h-600,c-maintain_ratio,q-80"
+    },
+    "uploadInfo": {
+      "originalFileName": "profile.jpg",
+      "fileSize": 2048576,
+      "mimeType": "image/jpeg",
+      "fileId": "imagekit_file_id_123"
+    }
+  }
+}
+```
+
+### Get Profile Image
+```http
+GET /api/v1/users/profile/image?size=thumbnail
+Authorization: Bearer <token>
+```
+
+**Query Parameters:**
+- `size` (optional): `thumbnail`, `small`, `medium`, `original`
+
+**Rate Limit:** 20 requests per 5 minutes
+
+### Delete Profile Image
+```http
+DELETE /api/v1/users/profile/image
+Authorization: Bearer <token>
+```
+
+**Rate Limit:** 5 deletes per 15 minutes per user
+
+### Update Profile Image Metadata
+```http
+PUT /api/v1/users/profile/image/meta
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{
+  "alt": "Profile picture of John Doe",
+  "caption": "My latest profile photo"
+}
+```
+
+### Get Profile Image by User ID (Public)
+```http
+GET /api/v1/users/profile/image/user/:userId?size=thumbnail
+```
+
+**Note:** This endpoint doesn't require authentication and is publicly accessible.
 
 ## 📅 Schedule Management
 
@@ -398,6 +532,11 @@ All API responses follow a consistent format:
 | 403 | ACCESS_DENIED | Insufficient permissions |
 | 404 | NOT_FOUND | Resource not found |
 | 409 | DUPLICATE_ERROR | Resource already exists |
+| 413 | FILE_TOO_LARGE | Uploaded file exceeds size limit |
+| 415 | INVALID_FILE_TYPE | File type not supported |
+| 422 | UPLOAD_FAILED | Image upload to ImageKit failed |
+| 404 | IMAGE_NOT_FOUND | Profile image not found |
+| 500 | DELETE_FAILED | Failed to delete image from ImageKit |
 | 429 | RATE_LIMIT_EXCEEDED | Too many requests |
 | 500 | INTERNAL_ERROR | Server error |
 | 502 | EXTERNAL_API_ERROR | External service error |
@@ -623,6 +762,21 @@ For support and questions:
 - [ ] Role-based access control (RBAC)
 - [ ] Multi-language support
 - [ ] Mobile app API endpoints
+- [ ] Bulk image operations
+- [ ] Image compression settings
+
+### Version 2.0 (Current)
+- [x] Profile image upload and management
+- [x] ImageKit integration
+- [x] Multiple image size variants
+- [x] Image metadata support
+- [x] Rate limiting for uploads
+- [x] Enhanced JWT authentication
+- [x] Class-based controllers
+- [x] Service layer pattern
+- [x] Comprehensive error handling
+- [x] Winston logging system
+- [x] Caching layer implementation
 
 ### Version 2.2 (Future)
 - [ ] GraphQL API support
@@ -630,6 +784,8 @@ For support and questions:
 - [ ] Event-driven architecture
 - [ ] Advanced caching with Redis
 - [ ] Machine learning integration
+- [ ] Image metadata search
+- [ ] Profile image history
 
 ---
 
