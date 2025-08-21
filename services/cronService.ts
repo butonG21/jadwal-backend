@@ -111,6 +111,7 @@ class CronService {
     this.jobs.set('attendance-fetch-main', mainTask);
     mainTask.start(); // Start the cron job
     logger.info('Main attendance fetch cronjob scheduled and started successfully');
+    logger.info(`Main cronjob status after start: running=${mainTask && typeof mainTask.start === 'function'}`);
 
     // Setup night schedule (23:50) if configured
     const nightSchedule = process.env.ATTENDANCE_CRON_SCHEDULE_NIGHT;
@@ -130,6 +131,7 @@ class CronService {
       this.jobs.set('attendance-fetch-night', nightTask);
       nightTask.start(); // Start the cron job
       logger.info('Night attendance fetch cronjob scheduled and started successfully');
+      logger.info(`Night cronjob status after start: running=${nightTask && typeof nightTask.start === 'function'}`);
     }
   }
 
@@ -362,14 +364,24 @@ class CronService {
     const status: Array<{ name: string; running: boolean }> = [];
     
     this.jobs.forEach((job, name) => {
-      // Check if job is running/scheduled (node-cron returns null when destroyed)
-      const jobStatus = job.getStatus();
+      // Check if job is running by checking if it's scheduled and not destroyed
+      let isRunning = false;
+      try {
+        // If job exists and we can call methods on it, it's running
+        isRunning = job && typeof job.start === 'function' && typeof job.stop === 'function';
+        logger.debug(`Job ${name} status check: exists=${!!job}, hasStartMethod=${typeof job?.start === 'function'}, running=${isRunning}`);
+      } catch (error) {
+        isRunning = false;
+        logger.debug(`Job ${name} status check failed:`, error);
+      }
+      
       status.push({
         name,
-        running: jobStatus !== null && jobStatus !== 'destroyed'
+        running: isRunning
       });
     });
 
+    logger.info(`Current jobs status:`, status);
     return status;
   }
 
