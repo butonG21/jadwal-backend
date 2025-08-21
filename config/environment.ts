@@ -24,6 +24,16 @@ export interface AppConfig {
     // Rate Limiting
     RATE_LIMIT_WINDOW_MS: number;
     RATE_LIMIT_MAX_REQUESTS: number;
+    
+    // Cron Job Configuration
+    ATTENDANCE_CRON_SCHEDULE?: string;
+    ATTENDANCE_CRON_TIMEZONE?: string;
+    ATTENDANCE_CRON_ENABLED?: string;
+    BASE_URL?: string;
+    
+    // Cron Job Authentication
+    CRON_AUTH_USERNAME?: string;
+    CRON_AUTH_PASSWORD?: string;
   }
   
   const requiredEnvVars = [
@@ -53,6 +63,16 @@ export interface AppConfig {
       IMAGEKIT_URL_ENDPOINT: process.env.IMAGEKIT_URL_ENDPOINT!,
       CORS_ORIGINS: process.env.CORS_ORIGINS,
       RATE_LIMIT_WINDOW_MS: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10), // 15 minutes
-      RATE_LIMIT_MAX_REQUESTS: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '1000', 10)
+      RATE_LIMIT_MAX_REQUESTS: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '1000', 10),
+      
+      // Cron Job Configuration
+      ATTENDANCE_CRON_SCHEDULE: process.env.ATTENDANCE_CRON_SCHEDULE,
+      ATTENDANCE_CRON_TIMEZONE: process.env.ATTENDANCE_CRON_TIMEZONE,
+      ATTENDANCE_CRON_ENABLED: process.env.ATTENDANCE_CRON_ENABLED,
+      BASE_URL: process.env.BASE_URL,
+      
+      // Cron Job Authentication
+      CRON_AUTH_USERNAME: process.env.CRON_AUTH_USERNAME,
+      CRON_AUTH_PASSWORD: process.env.CRON_AUTH_PASSWORD
     };
   }

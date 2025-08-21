@@ -14,6 +14,10 @@ import scheduleRoutes from './routes/scheduleRoutes';
 import userRoutes from './routes/userRoute';
 import authRoutes from './routes/authRoutes';
 import attendanceRoutes from './routes/attendance';
+import cronRoutes from './routes/cronRoutes';
+
+// Services
+import { cronService } from './services/cronService';
 
 // Middleware
 import { globalErrorHandler, notFoundHandler } from './middlewares/errorHandler';
@@ -136,6 +140,7 @@ class Application {
     this.app.use(`${apiV1}/users`, userRoutes);
     this.app.use(`${apiV1}/auth`, authRoutes);
     this.app.use(`${apiV1}/attendance`, attendanceRoutes);
+    this.app.use(`${apiV1}/cron`, cronRoutes);
 
     // Backward compatibility - keep old routes
     this.app.use('/api/schedule', scheduleRoutes);
@@ -289,6 +294,10 @@ class Application {
       // Connect to database first
       await connectDatabase();
       
+      // Initialize cron service
+      cronService.initialize();
+      logger.info('⏰ Cron service initialized');
+      
       // Start server
       const server = this.app.listen(this.PORT, () => {
         logger.info('🚀 Server started successfully');
@@ -316,6 +325,10 @@ class Application {
         // Stop accepting new connections
         server.close(async () => {
           logger.info('🔌 HTTP server closed');
+          
+          // Shutdown cron service
+          cronService.shutdown();
+          logger.info('⏰ Cron service shutdown');
           
           // Close database connection
           await mongoose.connection.close();

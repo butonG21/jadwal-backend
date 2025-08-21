@@ -26,6 +26,7 @@ A robust, scalable Node.js/Express backend API for employee scheduling and atten
 - **Graceful Shutdown**: Proper cleanup on application termination
 - **Health Checks**: Comprehensive system monitoring endpoints
 - **Request Tracing**: Request ID tracking for debugging
+- **Automated Cron Jobs**: Scheduled attendance data fetching with authentication
 
 ### Profile Image Management
 - **ImageKit Integration**: Cloud-based image processing and CDN delivery
@@ -94,6 +95,16 @@ LOG_LEVEL=info
 
 # Timezone
 TZ=Asia/Jakarta
+
+# Cron Job Configuration
+ATTENDANCE_CRON_ENABLED=true
+ATTENDANCE_CRON_SCHEDULE=0 7,8,13,18 * * *
+ATTENDANCE_CRON_SCHEDULE_NIGHT=50 23 * * *
+ATTENDANCE_CRON_TIMEZONE=Asia/Jakarta
+
+# Cron Authentication (required for API access)
+CRON_USERNAME=your-cron-username
+CRON_PASSWORD=your-cron-password
 ```
 
 ## 🚀 Installation & Setup
@@ -465,6 +476,184 @@ GET /api/v1/attendance/migration-stats
 Authorization: Bearer <token>
 ```
 
+## ⏰ Automated Cron Jobs
+
+The application includes automated cron job functionality to periodically fetch attendance data from external APIs. This ensures that attendance records are kept up-to-date without manual intervention.
+
+### Cron Job Configuration
+
+Cron jobs are configured through environment variables in your `.env` file:
+
+```bash
+# Cron Job Configuration
+ATTENDANCE_CRON_ENABLED=true
+ATTENDANCE_CRON_SCHEDULE=0 7,8,13,18 * * *
+ATTENDANCE_CRON_SCHEDULE_NIGHT=50 23 * * *
+ATTENDANCE_CRON_TIMEZONE=Asia/Jakarta
+
+# Cron Authentication (required for API access)
+CRON_USERNAME=your-cron-username
+CRON_PASSWORD=your-cron-password
+```
+
+### Environment Variables Explanation
+
+| Variable | Description | Example |
+|----------|-------------|----------|
+| `ATTENDANCE_CRON_ENABLED` | Enable/disable cron jobs | `true` or `false` |
+| `ATTENDANCE_CRON_SCHEDULE` | Main cron schedule (multiple times) | `0 7,8,13,18 * * *` |
+| `ATTENDANCE_CRON_SCHEDULE_NIGHT` | Night schedule (separate timing) | `50 23 * * *` |
+| `ATTENDANCE_CRON_TIMEZONE` | Timezone for cron execution | `Asia/Jakarta` |
+| `CRON_USERNAME` | Username for cron authentication | `admin` |
+| `CRON_PASSWORD` | Password for cron authentication | `secure-password` |
+
+### Default Schedule
+
+By default, the cron jobs are configured to run at:
+- **07:00** - Morning attendance fetch
+- **08:00** - Early morning attendance fetch
+- **13:00** - Afternoon attendance fetch
+- **18:00** - Evening attendance fetch
+- **23:50** - Late night attendance fetch
+
+All times are in the configured timezone (`Asia/Jakarta` by default).
+
+### Cron Schedule Format
+
+The cron schedule uses the standard cron format:
+```
+┌───────────── minute (0 - 59)
+│ ┌───────────── hour (0 - 23)
+│ │ ┌───────────── day of month (1 - 31)
+│ │ │ ┌───────────── month (1 - 12)
+│ │ │ │ ┌───────────── day of week (0 - 6) (Sunday to Saturday)
+│ │ │ │ │
+* * * * *
+```
+
+**Examples:**
+- `0 8 * * 1-5` - Every weekday at 8:00 AM
+- `30 14 * * *` - Every day at 2:30 PM
+- `0 */6 * * *` - Every 6 hours
+- `0 9,17 * * 1-5` - Weekdays at 9:00 AM and 5:00 PM
+
+### Cron Job Features
+
+#### Automatic Authentication
+- Cron jobs automatically authenticate using configured credentials
+- JWT tokens are managed internally for API access
+- No manual token management required
+
+#### Batch Processing
+- Processes attendance data in configurable batches
+- Handles large datasets efficiently
+- Provides detailed processing statistics
+
+#### Error Handling
+- Comprehensive error logging and reporting
+- Automatic retry mechanisms for failed requests
+- Graceful handling of API timeouts and network issues
+
+#### Monitoring and Logging
+- Detailed execution logs with timestamps
+- Success/failure statistics for each run
+- Performance metrics and processing times
+
+### Cron Job Logs
+
+Cron job execution is logged with detailed information:
+
+```
+2025-01-15 07:00:01 [INFO] Attendance cron job started (main schedule)
+2025-01-15 07:00:02 [INFO] Authenticating cron user...
+2025-01-15 07:00:03 [INFO] Authentication successful, token obtained
+2025-01-15 07:00:04 [INFO] Starting attendance fetch process...
+2025-01-15 07:00:05 [INFO] Processing batch 1/10...
+2025-01-15 07:00:15 [INFO] Batch 1/10 completed: 5 success, 0 failed
+2025-01-15 07:01:30 [INFO] Attendance fetch completed: 48/50 successful
+2025-01-15 07:01:31 [INFO] Attendance cron job finished successfully
+```
+
+### Manual Cron Trigger
+
+You can manually trigger the attendance fetch process using the API:
+
+```http
+POST /api/v1/attendance/fetch-all
+Authorization: Bearer <token>
+```
+
+This endpoint performs the same operation as the automated cron job.
+
+### Deployment Considerations
+
+#### Railway Deployment
+When deploying to Railway:
+1. Set all cron environment variables in Railway dashboard
+2. Cron jobs will start automatically with the application
+3. Railway supports IANA timezone names (e.g., `Asia/Jakarta`)
+4. No additional configuration required
+
+#### Docker Deployment
+For Docker deployments:
+1. Ensure timezone is properly set in container
+2. Include all cron environment variables in docker-compose or run command
+3. Consider using volume mounts for persistent logs
+
+#### Production Setup
+```bash
+# Production environment variables
+ATTENDANCE_CRON_ENABLED=true
+ATTENDANCE_CRON_SCHEDULE=0 7,8,13,18 * * *
+ATTENDANCE_CRON_SCHEDULE_NIGHT=50 23 * * *
+ATTENDANCE_CRON_TIMEZONE=Asia/Jakarta
+CRON_USERNAME=production-cron-user
+CRON_PASSWORD=secure-production-password
+```
+
+### Troubleshooting
+
+#### Common Issues
+
+**Cron jobs not running:**
+- Check `ATTENDANCE_CRON_ENABLED=true`
+- Verify cron schedule format
+- Check application logs for errors
+
+**Authentication failures:**
+- Verify `CRON_USERNAME` and `CRON_PASSWORD`
+- Ensure credentials have proper permissions
+- Check if user account is active
+
+**Timezone issues:**
+- Use IANA timezone names (e.g., `Asia/Jakarta`)
+- Verify server timezone configuration
+- Check cron execution logs for actual run times
+
+#### Monitoring Cron Jobs
+
+1. **Check application logs** for cron execution details
+2. **Monitor API endpoints** for successful attendance fetches
+3. **Set up alerts** for cron job failures
+4. **Review processing statistics** regularly
+
+### Customization
+
+To customize cron job behavior:
+
+1. **Modify schedules** by updating environment variables
+2. **Add new cron jobs** by extending the `CronService` class
+3. **Customize batch sizes** in the attendance service
+4. **Add custom notifications** for cron job results
+
+### Security Considerations
+
+- Store cron credentials securely in environment variables
+- Use strong passwords for cron authentication
+- Regularly rotate cron user credentials
+- Monitor cron job logs for suspicious activity
+- Limit cron user permissions to minimum required
+
 ## 🏥 Health & Monitoring
 
 ### Basic Health Check
@@ -777,6 +966,9 @@ For support and questions:
 - [x] Comprehensive error handling
 - [x] Winston logging system
 - [x] Caching layer implementation
+- [x] Automated cron jobs for attendance fetching
+- [x] Cron job authentication and scheduling
+- [x] Multiple cron schedules support
 
 ### Version 2.2 (Future)
 - [ ] GraphQL API support
