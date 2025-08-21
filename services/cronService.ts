@@ -47,7 +47,18 @@ class CronService {
   };
 
   constructor() {
-    this.baseUrl = process.env.BASE_URL || 'http://localhost:5000';
+    // For Railway deployment, use the Railway URL if available
+    // Railway provides RAILWAY_STATIC_URL or we can construct from environment
+    if (process.env.NODE_ENV === 'production' && process.env.RAILWAY_STATIC_URL) {
+      this.baseUrl = `https://${process.env.RAILWAY_STATIC_URL}`;
+    } else if (process.env.NODE_ENV === 'production' && process.env.PORT) {
+      // Fallback for production without Railway URL
+      this.baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT}`;
+    } else {
+      this.baseUrl = process.env.BASE_URL || 'http://localhost:5000';
+    }
+    
+    logger.info(`CronService initialized with base URL: ${this.baseUrl}`);
   }
 
   /**
@@ -98,7 +109,8 @@ class CronService {
     );
 
     this.jobs.set('attendance-fetch-main', mainTask);
-    logger.info('Main attendance fetch cronjob scheduled successfully');
+    mainTask.start(); // Start the cron job
+    logger.info('Main attendance fetch cronjob scheduled and started successfully');
 
     // Setup night schedule (23:50) if configured
     const nightSchedule = process.env.ATTENDANCE_CRON_SCHEDULE_NIGHT;
@@ -116,7 +128,8 @@ class CronService {
       );
 
       this.jobs.set('attendance-fetch-night', nightTask);
-      logger.info('Night attendance fetch cronjob scheduled successfully');
+      nightTask.start(); // Start the cron job
+      logger.info('Night attendance fetch cronjob scheduled and started successfully');
     }
   }
 
@@ -349,9 +362,11 @@ class CronService {
     const status: Array<{ name: string; running: boolean }> = [];
     
     this.jobs.forEach((job, name) => {
+      // Check if job is running/scheduled (node-cron returns null when destroyed)
+      const jobStatus = job.getStatus();
       status.push({
         name,
-        running: job.getStatus() === 'scheduled'
+        running: jobStatus !== null && jobStatus !== 'destroyed'
       });
     });
 

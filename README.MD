@@ -590,9 +590,11 @@ This endpoint performs the same operation as the automated cron job.
 #### Railway Deployment
 When deploying to Railway:
 1. Set all cron environment variables in Railway dashboard
-2. Cron jobs will start automatically with the application
-3. Railway supports IANA timezone names (e.g., `Asia/Jakarta`)
-4. No additional configuration required
+2. **Important**: Set `NODE_ENV=production` for proper URL detection
+3. **Important**: Set `BASE_URL` to your Railway app URL (e.g., `https://your-app.up.railway.app`)
+4. Cron jobs will start automatically with the application
+5. Railway supports IANA timezone names (e.g., `Asia/Jakarta`)
+6. The application will automatically detect Railway environment and use HTTPS URLs
 
 #### Docker Deployment
 For Docker deployments:
@@ -629,6 +631,13 @@ CRON_PASSWORD=secure-production-password
 - Use IANA timezone names (e.g., `Asia/Jakarta`)
 - Verify server timezone configuration
 - Check cron execution logs for actual run times
+
+**Railway deployment issues:**
+- Ensure `NODE_ENV=production` is set in Railway dashboard
+- Set `BASE_URL` to your Railway app URL (e.g., `https://your-app.up.railway.app`)
+- Check Railway logs for cron initialization messages
+- Verify all environment variables are properly set without quotes
+- Make sure cron jobs show `running: true` in status endpoint
 
 #### Monitoring Cron Jobs
 
