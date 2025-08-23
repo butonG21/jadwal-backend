@@ -1,0 +1,24 @@
+{
+  "name": "attendance-optimization-test",
+  "version": "1.0.0",
+  "description": "Test suite for attendance fetch optimization",
+  "main": "test-attendance-optimization.js",
+  "scripts": {
+    "test": "node test-attendance-optimization.js",
+    "test:quick": "TEST_EMPLOYEE_ID=12345 node test-attendance-optimization.js",
+    "test:custom": "node test-attendance-optimization.js",
+    "test:dev": "BASE_URL=http://localhost:5000 TEST_EMPLOYEE_ID=12345 node test-attendance-optimization.js",
+    "test:prod": "BASE_URL=https://your-production-url.com TEST_EMPLOYEE_ID=12345 node test-attendance-optimization.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  },
+  "keywords": [
+    "attendance",
+    "optimization",
+    "imagekit",
+    "test"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}

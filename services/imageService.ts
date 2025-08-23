@@ -36,6 +36,39 @@ export class ImageService {
     });
   }
 
+  /**
+   * Check if image URL is already from ImageKit
+   */
+  isImageKitUrl(imageUrl: string): boolean {
+    if (!imageUrl || imageUrl.trim() === '') {
+      return false;
+    }
+    return imageUrl.includes('imagekit.io');
+  }
+
+  /**
+   * Smart image processing - only upload if not already in ImageKit
+   */
+  async smartProcessAndUploadImage(
+    imageUrl: string,
+    userId: string,
+    date: string,
+    imageType: string
+  ): Promise<string | undefined> {
+    if (!imageUrl || imageUrl.trim() === '') {
+      return undefined;
+    }
+
+    // If already ImageKit URL, return as is
+    if (this.isImageKitUrl(imageUrl)) {
+      logger.info(`Image already in ImageKit for user ${userId}, ${imageType}: ${imageUrl}`);
+      return imageUrl;
+    }
+
+    // Otherwise, process and upload
+    return this.processAndUploadImage(imageUrl, userId, date, imageType);
+  }
+
   async processAndUploadImage(
     imageUrl: string,
     userId: string,
@@ -357,6 +390,65 @@ export class ImageService {
           end_image: record.end_image
         }
       }))
+    };
+  }
+
+  /**
+   * Get optimization statistics for fetch process
+   */
+  async getOptimizationStatistics() {
+    // Count total records with images
+    const totalWithImages = await Attendance.countDocuments({
+      $or: [
+        { start_image: { $exists: true, $nin: [null, ''] } },
+        { break_out_image: { $exists: true, $nin: [null, ''] } },
+        { break_in_image: { $exists: true, $nin: [null, ''] } },
+        { end_image: { $exists: true, $nin: [null, ''] } }
+      ]
+    });
+
+    // Count records with ImageKit URLs (optimized)
+    const optimizedImages = await Attendance.countDocuments({
+      $or: [
+        { start_image: /imagekit\.io/i },
+        { break_out_image: /imagekit\.io/i },
+        { break_in_image: /imagekit\.io/i },
+        { end_image: /imagekit\.io/i }
+      ]
+    });
+
+    // Count records that still need optimization
+    const needOptimization = await Attendance.countDocuments({
+      $or: [
+        { start_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } },
+        { break_out_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } },
+        { break_in_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } },
+        { end_image: { $exists: true, $nin: [null, ''], $not: /imagekit\.io/i } }
+      ]
+    });
+
+    // Calculate potential savings
+    const optimizationRate = totalWithImages > 0 ? 
+      parseFloat(((optimizedImages / totalWithImages) * 100).toFixed(2)) : 0;
+
+    return {
+      totalRecordsWithImages: totalWithImages,
+      optimizedImages,
+      needOptimization,
+      optimizationRate,
+      potentialSavings: {
+        description: 'Images that can be reused instead of re-uploaded',
+        count: optimizedImages,
+        percentage: optimizationRate
+      },
+      recommendations: {
+        fetchOptimization: optimizedImages > 0 ? 
+          'Smart fetch is working - reusing existing ImageKit URLs' : 
+          'No optimization detected - all images will be processed',
+        nextSteps: needOptimization > 0 ? 
+          `Consider running migration for ${needOptimization} remaining records` : 
+          'All images are optimized'
+      }
     };
   }
 }

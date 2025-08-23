@@ -5,6 +5,8 @@ import {
     getAttendanceByFilter,
     migrateExistingImages,
     getMigrationStats,
+    getOptimizationStats,
+    testOptimizedFetch,
     getJobStatus,
     getAllJobs
   } from '../controllers/attendanceController';
@@ -18,9 +20,13 @@ router.get('/:employeeId/filter', getAttendanceByFilter);
 router.get('/job-status/:jobId', getJobStatus);
 router.get('/jobs', getAllJobs);
 
-// New migration routes
+// Migration routes
 router.post('/migrate-images', migrateExistingImages);
 router.get('/migration-stats', getMigrationStats);
+
+// Optimization routes
+router.get('/optimization-stats', getOptimizationStats);
+router.get('/test-optimized-fetch/:employeeId', testOptimizedFetch);
 
 
 

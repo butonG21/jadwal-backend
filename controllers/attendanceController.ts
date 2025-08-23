@@ -143,18 +143,29 @@ class AttendanceController {
     date: string
   ): Promise<ProcessedAttendanceData> {
     try {
-      // Process images in parallel
+      // Check if attendance record already exists in database
+      const existingAttendance = await Attendance.findOne({ userid: userId, date: date });
+      
+      // Prepare image processing with smart logic
       const imageProcessingPromises = [
-        { type: 'start', url: apiData.mset_start_image },
-        { type: 'break_out', url: apiData.mset_break_out_image },
-        { type: 'break_in', url: apiData.mset_break_in_image },
-        { type: 'end', url: apiData.mset_end_image },
-      ].map(async ({ type, url }) => {
-        if (!url) return { type, url: undefined };
+        { type: 'start', apiUrl: apiData.mset_start_image, existingUrl: existingAttendance?.start_image },
+        { type: 'break_out', apiUrl: apiData.mset_break_out_image, existingUrl: existingAttendance?.break_out_image },
+        { type: 'break_in', apiUrl: apiData.mset_break_in_image, existingUrl: existingAttendance?.break_in_image },
+        { type: 'end', apiUrl: apiData.mset_end_image, existingUrl: existingAttendance?.end_image },
+      ].map(async ({ type, apiUrl, existingUrl }) => {
+        if (!apiUrl) return { type, url: undefined };
         
         try {
-          const processedUrl = await this.imageService.processAndUploadImage(
-            url,
+          // If existing URL is already ImageKit, reuse it (skip processing)
+          // This prevents infinite looping since API URL will always be different from ImageKit URL
+          if (existingUrl && this.imageService.isImageKitUrl(existingUrl)) {
+            logger.info(`Reusing existing ImageKit URL for user ${userId}, ${type}: ${existingUrl}`);
+            return { type, url: existingUrl };
+          }
+
+          // Only process if no existing ImageKit URL or existing URL is not from ImageKit
+          const processedUrl = await this.imageService.smartProcessAndUploadImage(
+            apiUrl,
             userId,
             date,
             type
@@ -162,7 +173,11 @@ class AttendanceController {
           return { type, url: processedUrl };
         } catch (error) {
           logger.warn(`Failed to process ${type} image for user ${userId}:`, error);
-          return { type, url }; // Return original URL as fallback
+          // Fallback: use existing ImageKit URL if available, otherwise use API URL
+          const fallbackUrl = (existingUrl && this.imageService.isImageKitUrl(existingUrl)) 
+            ? existingUrl 
+            : apiUrl;
+          return { type, url: fallbackUrl };
         }
       });
 
@@ -193,6 +208,29 @@ class AttendanceController {
         end_address: apiData.mset_end_address,
         end_image: processedImages.end_image || apiData.mset_end_image,
       };
+
+      // Log optimization results
+      const optimizationStats = {
+        reusedImages: 0,
+        newUploads: 0,
+        skippedImages: 0
+      };
+      
+      ['start', 'break_out', 'break_in', 'end'].forEach(type => {
+        const existingUrl = existingAttendance?.[`${type}_image` as keyof typeof existingAttendance] as string;
+        const apiUrl = apiData[`mset_${type}_image` as keyof AttendanceApiResponse] as string;
+        const finalUrl = processedImages[`${type}_image`];
+        
+        if (existingUrl && this.imageService.isImageKitUrl(existingUrl) && finalUrl === existingUrl) {
+          optimizationStats.reusedImages++;
+        } else if (finalUrl && this.imageService.isImageKitUrl(finalUrl) && finalUrl !== apiUrl) {
+          optimizationStats.newUploads++;
+        } else if (!apiUrl) {
+          optimizationStats.skippedImages++;
+        }
+      });
+      
+      logger.info(`Image processing optimization for user ${userId}:`, optimizationStats);
 
       return attendanceData;
       
@@ -556,6 +594,115 @@ class AttendanceController {
       ApiResponse.success('Migration statistics retrieved successfully', stats)
     );
   });
+
+  getOptimizationStats = asyncHandler(async (req: Request, res: Response) => {
+    const stats = await this.imageService.getOptimizationStatistics();
+    
+    res.status(200).json(
+      ApiResponse.success('Optimization statistics retrieved successfully', stats)
+    );
+  });
+
+  /**
+   * Test optimized fetch for a specific user
+   */
+  testOptimizedFetch = asyncHandler(async (req: Request, res: Response) => {
+    const { employeeId } = req.params;
+    const requestId = (req as any).requestId;
+
+    if (!employeeId) {
+      throw new AppError('Employee ID is required', 400);
+    }
+
+    logger.info(`Testing optimized fetch for user ${employeeId}`, { requestId });
+
+    const schedule = await Schedule.findOne({ employee_id: employeeId });
+    if (!schedule) {
+      throw new NotFoundError(`Employee ${employeeId} not found in schedule`);
+    }
+
+    const attendanceDate = DateHelper.getCurrentDateIndonesia();
+    const startTime = Date.now();
+    
+    try {
+      // Get existing attendance data for comparison
+      const existingAttendance = await Attendance.findOne({ userid: employeeId, date: attendanceDate });
+      
+      const apiData = await this.fetchAttendanceFromAPI(employeeId);
+
+      if (!apiData.success) {
+        throw new ExternalApiError('Attendance API returned unsuccessful response');
+      }
+
+      const attendanceData = await this.processAttendanceData(
+        employeeId,
+        schedule.name,
+        apiData,
+        attendanceDate
+      );
+
+      const savedAttendance = await this.attendanceService.saveAttendanceData(attendanceData);
+      const processingTime = Date.now() - startTime;
+
+      // Calculate optimization metrics
+      const optimizationMetrics = {
+        processingTimeMs: processingTime,
+        hadExistingData: !!existingAttendance,
+        imageOptimization: {
+          start_image: {
+            wasOptimized: existingAttendance?.start_image && this.imageService.isImageKitUrl(existingAttendance.start_image),
+            finalUrl: savedAttendance.start_image,
+            isImageKit: savedAttendance.start_image ? this.imageService.isImageKitUrl(savedAttendance.start_image) : false
+          },
+          break_out_image: {
+            wasOptimized: existingAttendance?.break_out_image && this.imageService.isImageKitUrl(existingAttendance.break_out_image),
+            finalUrl: savedAttendance.break_out_image,
+            isImageKit: savedAttendance.break_out_image ? this.imageService.isImageKitUrl(savedAttendance.break_out_image) : false
+          },
+          break_in_image: {
+            wasOptimized: existingAttendance?.break_in_image && this.imageService.isImageKitUrl(existingAttendance.break_in_image),
+            finalUrl: savedAttendance.break_in_image,
+            isImageKit: savedAttendance.break_in_image ? this.imageService.isImageKitUrl(savedAttendance.break_in_image) : false
+          },
+          end_image: {
+            wasOptimized: existingAttendance?.end_image && this.imageService.isImageKitUrl(existingAttendance.end_image),
+            finalUrl: savedAttendance.end_image,
+            isImageKit: savedAttendance.end_image ? this.imageService.isImageKitUrl(savedAttendance.end_image) : false
+          }
+        }
+      };
+
+      logger.info(`Optimized fetch completed for user ${employeeId}`, { 
+        requestId, 
+        processingTime,
+        optimizationMetrics
+      });
+
+      res.status(200).json(
+        ApiResponse.success('Optimized attendance fetch completed', {
+          attendance: savedAttendance,
+          optimization: optimizationMetrics,
+          meta: {
+            processedDate: attendanceDate,
+            serverTime: new Date().toISOString(),
+            timezone: 'Asia/Jakarta'
+          }
+        })
+      );
+
+    } catch (error: any) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+      
+      logger.error(`Failed to test optimized fetch for user ${employeeId}:`, {
+        error: error.message,
+        requestId
+      });
+      
+      throw new AppError('Failed to test optimized fetch', 500);
+    }
+  });
 }
 
 // Export controller instance
@@ -568,6 +715,8 @@ export const {
   getAttendanceByFilter,
   migrateExistingImages,
   getMigrationStats,
+  getOptimizationStats,
+  testOptimizedFetch,
   getJobStatus,
   getAllJobs
 } = attendanceController;
