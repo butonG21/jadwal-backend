@@ -12,6 +12,7 @@ import { ImageService } from '../services/imageService';
 import { AttendanceService } from '../services/attendanceService';
 import { cache } from '../utils/cache';
 import { API_ENDPOINTS, IMAGE_PROCESSING } from '../config/constants';
+import { jobQueueService } from '../services/jobQueueService';
 
 // Types
 interface AttendanceApiResponse {
@@ -98,7 +99,8 @@ class AttendanceController {
   
     let attempts = 0;
     const maxRetries = 3;
-    const url = `${API_ENDPOINTS.ATTENDANCE_API_BASE}/${API_ENDPOINTS.ATTENDANCE_GET_TRIP_REPORT}`;
+    const baseUrl = process.env.ATTENDANCE_API_URL || API_ENDPOINTS.ATTENDANCE_API_BASE;
+    const url = `${baseUrl.replace(/\/$/, '')}/${API_ENDPOINTS.ATTENDANCE_GET_TRIP_REPORT}`;
   
     while (attempts < maxRetries) {
       try {
@@ -203,114 +205,212 @@ class AttendanceController {
   // Main method to fetch attendance for all employees
   fetchAttendance = asyncHandler(async (req: Request, res: Response) => {
     const requestId = (req as any).requestId;
-    logger.info(`Starting bulk attendance fetch process`, { requestId });
-
-    const schedules = await Schedule.find({ 
-      employee_id: { $ne: null, $exists: true } 
-    });
+    const triggeredBy = req.body?.triggeredBy || 'manual';
     
-    if (schedules.length === 0) {
-      return res.status(200).json(
-        ApiResponse.success('No schedules found with employee IDs', {
-          processed: 0,
-          success: 0,
-          failed: 0,
-          total: 0
+    logger.info(`Starting bulk attendance fetch process`, { requestId, triggeredBy });
+
+    // Check if there's already a running attendance fetch job
+    if (jobQueueService.hasRunningAttendanceFetch()) {
+      const runningJob = jobQueueService.getRunningJobs().find(job => job.type === 'attendance-fetch');
+      return res.status(409).json(
+        ApiResponse.error('Attendance fetch is already running', 'JOB_ALREADY_RUNNING', 409, {
+          jobId: runningJob?.id,
+          startTime: runningJob?.startTime,
+          progress: runningJob?.progress
         })
       );
     }
 
-    const attendanceDate = DateHelper.getCurrentDateIndonesia();
-    const batchSize = IMAGE_PROCESSING.BATCH_SIZE;
+    // Create a new job
+    const jobId = jobQueueService.createJob('attendance-fetch', triggeredBy);
     
-    let successCount = 0;
-    let failCount = 0;
-    const results: Array<{ userId: string; status: 'success' | 'failed'; error?: string }> = [];
+    // Return immediate response with job ID
+    res.status(202).json(
+      ApiResponse.success('Attendance fetch process started', {
+        jobId,
+        message: 'Process is running in background. Use /api/v1/attendance/job-status/:jobId to check progress',
+        status: 'started'
+      })
+    );
 
-    // Process in batches to avoid overwhelming external services
-    for (let i = 0; i < schedules.length; i += batchSize) {
-      const batch = schedules.slice(i, i + batchSize);
+    // Start background processing (don't await)
+    this.processAttendanceInBackground(jobId, requestId).catch(error => {
+      logger.error('Background attendance fetch failed:', { error: error.message, jobId, requestId });
+      jobQueueService.failJob(jobId, error.message);
+    });
+  });
+
+  /**
+   * Process attendance fetch in background
+   */
+  private async processAttendanceInBackground(jobId: string, requestId: string): Promise<void> {
+    try {
+      // Start the job
+      jobQueueService.startJob(jobId);
       
-      logger.info(`Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(schedules.length / batchSize)}`, {
-        requestId,
-        batchSize: batch.length
+      const schedules = await Schedule.find({ 
+        employee_id: { $ne: null, $exists: true } 
       });
+      
+      if (schedules.length === 0) {
+        jobQueueService.completeJob(jobId, {
+          totalUsers: 0,
+          successCount: 0,
+          failureCount: 0
+        });
+        return;
+      }
 
-      const batchPromises = batch.map(async (schedule) => {
-        const userId = schedule.employee_id;
-        if (!userId) return { userId: 'unknown', status: 'failed' as const, error: 'Missing employee ID' };
+      const attendanceDate = DateHelper.getCurrentDateIndonesia();
+      const batchSize = IMAGE_PROCESSING.BATCH_SIZE;
+      const totalBatches = Math.ceil(schedules.length / batchSize);
+      
+      let successCount = 0;
+      let failCount = 0;
+      const errors: string[] = [];
 
-        try {
-          const apiData = await this.fetchAttendanceFromAPI(userId);
+      // Process in batches to avoid overwhelming external services
+      for (let i = 0; i < schedules.length; i += batchSize) {
+        const batch = schedules.slice(i, i + batchSize);
+        const currentBatch = Math.floor(i / batchSize) + 1;
+        
+        // Update progress
+        jobQueueService.updateProgress(jobId, {
+          current: i,
+          total: schedules.length,
+          currentBatch,
+          totalBatches
+        });
+        
+        logger.info(`Processing batch ${currentBatch}/${totalBatches}`, {
+          requestId,
+          jobId,
+          batchSize: batch.length
+        });
 
-          if (!apiData.success) {
-            return { userId, status: 'failed' as const, error: 'API returned unsuccessful response' };
+        const batchPromises = batch.map(async (schedule) => {
+          const userId = schedule.employee_id;
+          if (!userId) return { userId: 'unknown', status: 'failed' as const, error: 'Missing employee ID' };
+
+          try {
+            const apiData = await this.fetchAttendanceFromAPI(userId);
+
+            if (!apiData.success) {
+              return { userId, status: 'failed' as const, error: 'API returned unsuccessful response' };
+            }
+
+            const attendanceData = await this.processAttendanceData(
+              userId,
+              schedule.name,
+              apiData,
+              attendanceDate
+            );
+
+            await this.attendanceService.saveAttendanceData(attendanceData);
+            
+            logger.info(`Successfully processed attendance for user ${userId}`, { requestId, jobId });
+            return { userId, status: 'success' as const };
+
+          } catch (error: any) {
+            logger.error(`Failed to process attendance for user ${userId}:`, {
+              error: error.message,
+              requestId,
+              jobId
+            });
+            return { userId, status: 'failed' as const, error: error.message };
           }
+        });
 
-          const attendanceData = await this.processAttendanceData(
-            userId,
-            schedule.name,
-            apiData,
-            attendanceDate
-          );
-
-          await this.attendanceService.saveAttendanceData(attendanceData);
-          
-          logger.info(`Successfully processed attendance for user ${userId}`, { requestId });
-          return { userId, status: 'success' as const };
-
-        } catch (error: any) {
-          logger.error(`Failed to process attendance for user ${userId}:`, {
-            error: error.message,
-            requestId
-          });
-          return { userId, status: 'failed' as const, error: error.message };
-        }
-      });
-
-      const batchResults = await Promise.allSettled(batchPromises);
-      
-      batchResults.forEach((result) => {
-        if (result.status === 'fulfilled') {
-          const { status } = result.value;
-          if (status === 'success') {
-            successCount++;
+        const batchResults = await Promise.allSettled(batchPromises);
+        
+        batchResults.forEach((result) => {
+          if (result.status === 'fulfilled') {
+            const { status, error } = result.value;
+            if (status === 'success') {
+              successCount++;
+            } else {
+              failCount++;
+              if (error) errors.push(error);
+            }
           } else {
             failCount++;
+            errors.push(result.reason?.message || 'Unknown error');
           }
-          results.push(result.value);
-        } else {
-          failCount++;
-          results.push({ userId: 'unknown', status: 'failed', error: result.reason?.message });
+        });
+
+        // Add delay between batches
+        if (i + batchSize < schedules.length) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
+      }
+
+      // Clear cache after bulk operation
+      cache.flush();
+
+      // Complete the job
+      jobQueueService.completeJob(jobId, {
+        totalUsers: schedules.length,
+        successCount,
+        failureCount: failCount,
+        errors: errors.slice(0, 10) // Keep only first 10 errors
       });
 
-      // Add delay between batches
-      if (i + batchSize < schedules.length) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
+      logger.info('Background attendance fetch completed', { 
+        requestId,
+        jobId,
+        totalUsers: schedules.length,
+        successCount,
+        failCount
+      });
+
+    } catch (error: any) {
+      logger.error('Background attendance fetch failed:', { 
+        error: error.message, 
+        jobId, 
+        requestId 
+      });
+      jobQueueService.failJob(jobId, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get job status
+   */
+  getJobStatus = asyncHandler(async (req: Request, res: Response) => {
+    const { jobId } = req.params;
+    
+    if (!jobId) {
+      return res.status(400).json(
+        ApiResponse.error('Job ID is required')
+      );
     }
 
-    // Clear cache after bulk operation
-    cache.flush();
-
-    const responseData = {
-      processed: schedules.length,
-      success: successCount,
-      failed: failCount,
-      total: schedules.length,
-      date: attendanceDate,
-      results: results.slice(0, 10), // Show first 10 results to avoid large response
-      hasMoreResults: results.length > 10
-    };
-
-    logger.info('Bulk attendance fetch completed', { 
-      requestId, 
-      ...responseData 
-    });
+    const job = jobQueueService.getJob(jobId);
+    
+    if (!job) {
+      return res.status(404).json(
+        ApiResponse.error('Job not found')
+      );
+    }
 
     res.status(200).json(
-      ApiResponse.success('Attendance fetch process completed', responseData)
+      ApiResponse.success('Job status retrieved', job)
+    );
+  });
+
+  /**
+   * Get all jobs
+   */
+  getAllJobs = asyncHandler(async (req: Request, res: Response) => {
+    const jobs = jobQueueService.getAllJobs();
+    const stats = jobQueueService.getStats();
+    
+    res.status(200).json(
+      ApiResponse.success('Jobs retrieved', {
+        jobs,
+        stats
+      })
     );
   });
 
@@ -467,5 +567,7 @@ export const {
   fetchAttendanceByUser,
   getAttendanceByFilter,
   migrateExistingImages,
-  getMigrationStats
+  getMigrationStats,
+  getJobStatus,
+  getAllJobs
 } = attendanceController;

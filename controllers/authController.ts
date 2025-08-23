@@ -68,15 +68,18 @@ class AuthController {
 
       logger.info(`Attempting external authentication for user: ${username}`);
 
+      const baseUrl = process.env.ATTENDANCE_API_URL || API_ENDPOINTS.ATTENDANCE_API_BASE;
+      const url = `${baseUrl.replace(/\/$/, '')}/${API_ENDPOINTS.ATTENDANCE_CHECK_LOGIN}`;
+
       const response = await axios.post(
-        `${API_ENDPOINTS.ATTENDANCE_API_BASE}/${API_ENDPOINTS.ATTENDANCE_CHECK_LOGIN}`,
+        url,
         formData.toString(),
         {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
             'User-Agent': 'JadwalApp/2.0'
           },
-          timeout: 10000, // 10 seconds timeout
+          timeout: 10000, // 10 seconds timeout,
         }
       );
 

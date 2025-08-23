@@ -27,6 +27,9 @@ A robust, scalable Node.js/Express backend API for employee scheduling and atten
 - **Health Checks**: Comprehensive system monitoring endpoints
 - **Request Tracing**: Request ID tracking for debugging
 - **Automated Cron Jobs**: Scheduled attendance data fetching with authentication
+- **Asynchronous Processing**: Background job processing to prevent HTTP timeouts
+- **Job Queue System**: In-memory job tracking with real-time status monitoring
+- **Progress Tracking**: Real-time progress updates for long-running operations
 
 ### Profile Image Management
 - **ImageKit Integration**: Cloud-based image processing and CDN delivery
@@ -44,6 +47,46 @@ Before running this application, make sure you have the following installed:
 - **MongoDB** (v5.0 or higher)
 - **Redis** (v6.0 or higher) - for caching
 - **Git** - for version control
+
+## 🔍 System Endpoints
+
+### Health Check
+```http
+GET /health
+```
+
+**Response:**
+```json
+{
+  "status": "OK",
+  "timestamp": "2025-01-15T10:30:00.000Z",
+  "uptime": 3600.123,
+  "environment": "development",
+  "version": "1.0.0",
+  "database": {
+    "status": "connected",
+    "name": "jadwal_db"
+  },
+  "memory": {
+    "used": "45.2 MB",
+    "total": "128 MB"
+  }
+}
+```
+
+### API Documentation
+```http
+GET /api-docs
+```
+
+**Response:** Returns Swagger/OpenAPI documentation interface
+
+### API Documentation JSON
+```http
+GET /api-docs.json
+```
+
+**Response:** Returns OpenAPI specification in JSON format
 
 ### External Services
 
@@ -157,6 +200,43 @@ All protected endpoints require a Bearer token in the Authorization header:
 Authorization: Bearer <your-jwt-token>
 ```
 
+### Rate Limiting
+The API implements rate limiting to prevent abuse and ensure fair usage:
+
+#### Profile Image Endpoints
+- **Upload**: 5 uploads per 15 minutes per user
+- **Get**: 20 requests per 5 minutes per user
+- **Delete**: 5 deletes per 15 minutes per user
+- **Update Metadata**: 10 updates per 15 minutes per user
+
+#### General API Endpoints
+- **Authentication**: 10 login attempts per 15 minutes per IP
+- **Schedule**: 100 requests per 15 minutes per user
+- **Attendance**: 50 requests per 15 minutes per user
+- **Cron Management**: 20 requests per 15 minutes per user
+
+#### Rate Limit Headers
+When rate limits are applied, the following headers are included in responses:
+```
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 95
+X-RateLimit-Reset: 1642694400
+Retry-After: 900
+```
+
+### Security Headers
+The API includes security headers in all responses:
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `X-XSS-Protection: 1; mode=block`
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains`
+
+### Input Validation
+- All input data is validated and sanitized
+- File uploads are restricted by type and size
+- SQL injection protection through parameterized queries
+- XSS protection through input sanitization
+
 ### Authentication Endpoints
 
 #### Login
@@ -165,8 +245,8 @@ POST /api/v1/auth/login
 Content-Type: application/json
 
 {
-  "username": "your-username",
-  "password": "your-password"
+  "uid": "your_uid",
+  "password": "your_password"
 }
 ```
 
@@ -195,9 +275,21 @@ POST /api/v1/auth/logout
 Authorization: Bearer <token>
 ```
 
+**Alternative method:**
+```http
+GET /api/v1/auth/logout
+Authorization: Bearer <token>
+```
+
 #### Verify Token
 ```http
 GET /api/v1/auth/verify
+Authorization: Bearer <token>
+```
+
+#### Get Auth Status
+```http
+GET /api/v1/auth/status
 Authorization: Bearer <token>
 ```
 
@@ -237,6 +329,42 @@ Authorization: Bearer <token>
 }
 ```
 
+### Get User Profile (Alternative Endpoint)
+```http
+GET /api/v1/user/profile
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Profile retrieved successfully",
+  "data": {
+    "uid": "user_123456",
+    "name": "Anggi Firmansyah",
+    "email": "anggi@example.com",
+    "employee_id": "2405047",
+    "position": "Staff",
+    "department": "IT",
+    "profileImage": "https://ik.imagekit.io/example/profile_abc123.jpg",
+    "profileImageThumbnail": "https://ik.imagekit.io/example/profile_abc123_thumbnail.jpg",
+    "profileImageVariants": {
+      "thumbnail": "https://ik.imagekit.io/example/profile_abc123_thumbnail.jpg",
+      "small": "https://ik.imagekit.io/example/profile_abc123_small.jpg",
+      "medium": "https://ik.imagekit.io/example/profile_abc123_medium.jpg",
+      "original": "https://ik.imagekit.io/example/profile_abc123.jpg"
+    },
+    "profileImageMeta": {
+      "alt": "Profile picture of Anggi Firmansyah",
+      "caption": "My profile photo"
+    },
+    "createdAt": "2025-01-15T08:00:00.000Z",
+    "updatedAt": "2025-01-15T10:30:00.000Z"
+  }
+}
+```
+
 ### Update User Profile
 ```http
 PUT /api/v1/users/me
@@ -250,10 +378,90 @@ Authorization: Bearer <token>
 }
 ```
 
+### Update User Profile (Alternative Endpoint)
+```http
+PUT /api/v1/user/profile
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "name": "Anggi Firmansyah Updated",
+  "position": "Senior Staff",
+  "department": "IT Development"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Profile updated successfully",
+  "data": {
+    "uid": "user_123456",
+    "name": "Anggi Firmansyah Updated",
+    "email": "anggi@example.com",
+    "employee_id": "2405047",
+    "position": "Senior Staff",
+    "department": "IT Development",
+    "updatedAt": "2025-01-15T10:35:00.000Z"
+  }
+}
+```
+
 ### Get User Statistics
 ```http
 GET /api/v1/users/me/stats
 Authorization: Bearer <token>
+```
+
+### Get User Statistics (Alternative Endpoint)
+```http
+GET /api/v1/user/stats
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "User statistics retrieved successfully",
+  "data": {
+    "uid": "user_123456",
+    "employee_id": "2405047",
+    "statistics": {
+      "total_scheduled_days": 156,
+      "current_month_days": 22,
+      "attendance_summary": {
+        "present": 145,
+        "absent": 8,
+        "late": 3,
+        "attendance_rate": 92.9
+      },
+      "shift_distribution": {
+        "Pagi": 65,
+        "Siang": 52,
+        "Malam": 39
+      },
+      "monthly_breakdown": [
+        {
+          "month": 8,
+          "year": 2025,
+          "scheduled_days": 23,
+          "present_days": 21,
+          "attendance_rate": 91.3
+        }
+      ]
+    },
+    "period": {
+      "start": "2025-01-01",
+      "end": "2025-08-31"
+    },
+    "last_updated": "2025-01-15T10:30:00.000Z"
+  }
+}
 ```
 
 ## 🖼️ Profile Image Management
@@ -298,6 +506,51 @@ Form Data:
 }
 ```
 
+### Upload Profile Image (Alternative Endpoint)
+```http
+POST /api/v1/profile/image/upload
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+```
+
+**Request Body (Form Data):**
+- `profileImage`: Image file (JPEG, PNG, WebP - Max 10MB)
+- `alt`: Alternative text for the image (optional)
+- `caption`: Caption for the image (optional)
+
+**Rate Limit:** 5 uploads per 15 minutes per user
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Profile image uploaded successfully",
+  "data": {
+    "uid": "user_123456",
+    "name": "Anggi Firmansyah",
+    "email": "anggi@example.com",
+    "profileImage": "https://ik.imagekit.io/example/profile_abc123.jpg",
+    "profileImageThumbnail": "https://ik.imagekit.io/example/profile_abc123_thumbnail.jpg",
+    "profileImageVariants": {
+      "thumbnail": "https://ik.imagekit.io/example/profile_abc123_thumbnail.jpg",
+      "small": "https://ik.imagekit.io/example/profile_abc123_small.jpg",
+      "medium": "https://ik.imagekit.io/example/profile_abc123_medium.jpg",
+      "original": "https://ik.imagekit.io/example/profile_abc123.jpg"
+    },
+    "profileImageMeta": {
+      "alt": "Profile picture of Anggi Firmansyah",
+      "caption": "My new profile photo"
+    },
+    "uploadInfo": {
+      "fileId": "abc123xyz789",
+      "fileName": "profile_abc123.jpg",
+      "fileSize": 2048576,
+      "uploadedAt": "2025-01-15T10:30:00.000Z"
+    }
+  }
+}
+```
+
 ### Get Profile Image
 ```http
 GET /api/v1/users/profile/image?size=thumbnail
@@ -309,10 +562,71 @@ Authorization: Bearer <token>
 
 **Rate Limit:** 20 requests per 5 minutes
 
+### Get Profile Image (Alternative Endpoint)
+```http
+GET /api/v1/profile/image?size=thumbnail
+Authorization: Bearer <token>
+```
+
+**Query Parameters:**
+- `size` (optional): `thumbnail`, `small`, `medium`, `original`
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Profile image retrieved successfully",
+  "data": {
+    "uid": "user_123456",
+    "profileImage": "https://ik.imagekit.io/example/profile_abc123.jpg",
+    "profileImageThumbnail": "https://ik.imagekit.io/example/profile_abc123_thumbnail.jpg",
+    "profileImageVariants": {
+      "thumbnail": "https://ik.imagekit.io/example/profile_abc123_thumbnail.jpg",
+      "small": "https://ik.imagekit.io/example/profile_abc123_small.jpg",
+      "medium": "https://ik.imagekit.io/example/profile_abc123_medium.jpg",
+      "original": "https://ik.imagekit.io/example/profile_abc123.jpg"
+    },
+    "profileImageMeta": {
+      "alt": "Profile picture of Anggi Firmansyah",
+      "caption": "My profile photo"
+    },
+    "requestedSize": "thumbnail",
+    "imageUrl": "https://ik.imagekit.io/example/profile_abc123_thumbnail.jpg"
+  }
+}
+```
+
+**Rate Limit:** 20 requests per 5 minutes
+
 ### Delete Profile Image
 ```http
 DELETE /api/v1/users/profile/image
 Authorization: Bearer <token>
+```
+
+**Rate Limit:** 5 deletes per 15 minutes per user
+
+### Delete Profile Image (Alternative Endpoint)
+```http
+DELETE /api/v1/profile/image
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Profile image deleted successfully",
+  "data": {
+    "uid": "user_123456",
+    "name": "Anggi Firmansyah",
+    "profileImage": null,
+    "profileImageThumbnail": null,
+    "profileImageVariants": null,
+    "profileImageMeta": null,
+    "deletedAt": "2025-01-15T10:30:00.000Z"
+  }
+}
 ```
 
 **Rate Limit:** 5 deletes per 15 minutes per user
@@ -329,9 +643,74 @@ Authorization: Bearer <token>
 }
 ```
 
+### Update Profile Image Metadata (Alternative Endpoint)
+```http
+PUT /api/v1/profile/image/meta
+Content-Type: application/json
+Authorization: Bearer <token>
+```
+
+**Request Body:**
+```json
+{
+  "alt": "Profile picture of Anggi Firmansyah",
+  "caption": "My updated profile photo"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Profile image metadata updated successfully",
+  "data": {
+    "uid": "user_123456",
+    "name": "Anggi Firmansyah",
+    "profileImageMeta": {
+      "alt": "Profile picture of Anggi Firmansyah",
+      "caption": "My updated profile photo"
+    },
+    "updatedAt": "2025-01-15T10:30:00.000Z"
+  }
+}
+```
+
 ### Get Profile Image by User ID (Public)
 ```http
 GET /api/v1/users/profile/image/user/:userId?size=thumbnail
+```
+
+**Note:** This endpoint doesn't require authentication and is publicly accessible.
+
+### Get Profile Image by User ID (Alternative Public Endpoint)
+```http
+GET /api/v1/profile/image/user/:userId?size=thumbnail
+```
+
+**Parameters:**
+- `userId`: User ID or UID
+- `size` (optional): `thumbnail`, `small`, `medium`, `original`
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Profile image retrieved successfully",
+  "data": {
+    "uid": "user_123456",
+    "name": "Anggi Firmansyah",
+    "profileImage": "https://ik.imagekit.io/example/profile_abc123.jpg",
+    "profileImageThumbnail": "https://ik.imagekit.io/example/profile_abc123_thumbnail.jpg",
+    "profileImageVariants": {
+      "thumbnail": "https://ik.imagekit.io/example/profile_abc123_thumbnail.jpg",
+      "small": "https://ik.imagekit.io/example/profile_abc123_small.jpg",
+      "medium": "https://ik.imagekit.io/example/profile_abc123_medium.jpg",
+      "original": "https://ik.imagekit.io/example/profile_abc123.jpg"
+    },
+    "requestedSize": "thumbnail",
+    "imageUrl": "https://ik.imagekit.io/example/profile_abc123_thumbnail.jpg"
+  }
+}
 ```
 
 **Note:** This endpoint doesn't require authentication and is publicly accessible.
@@ -366,11 +745,121 @@ GET /api/v1/schedule/:employeeId
 Authorization: Bearer <token>
 ```
 
+**Parameters:**
+- `employeeId`: Employee ID (e.g., "2405047")
+
 ### Filter Schedule by Month
 ```http
 GET /api/v1/schedule/:employeeId/filter?month=7&year=2025
 Authorization: Bearer <token>
 ```
+
+**Parameters:**
+- `employeeId`: Employee ID (required)
+- `month`: Month number 1-12 (required)
+- `year`: Year in YYYY format (required)
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Schedule retrieved successfully for 7/2025",
+  "data": {
+    "employee_id": "2405047",
+    "name": "Anggi Firmansyah",
+    "position": "Staff",
+    "department": "IT",
+    "filter": {
+      "month": 7,
+      "year": 2025,
+      "month_name": "July",
+      "total_days": 22
+    },
+    "statistics": {
+      "total_scheduled_days": 22,
+      "shift_distribution": {
+        "Pagi": 10,
+        "Siang": 8,
+        "Malam": 4
+      },
+      "working_days_in_month": 31
+    },
+    "schedule": [
+      {
+        "date": "2025-07-01",
+        "shift": "Pagi"
+      },
+      {
+        "date": "2025-07-02",
+        "shift": "Siang"
+      }
+    ]
+  }
+}
+```
+
+### Get Current Month Schedule
+```http
+GET /api/v1/schedule/:employeeId/current-month
+Authorization: Bearer <token>
+```
+
+**Parameters:**
+- `employeeId`: Employee ID (required)
+
+### Get Available Months
+```http
+GET /api/v1/schedule/:employeeId/available-months
+Authorization: Bearer <token>
+```
+
+**Parameters:**
+- `employeeId`: Employee ID (required)
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Available months retrieved successfully",
+  "data": {
+    "employee_id": "2405047",
+    "available_months": [
+      {
+        "year": 2025,
+        "month": 8,
+        "month_name": "August",
+        "total_days": 23,
+        "period": {
+          "start": "2025-08-01",
+          "end": "2025-08-31"
+        }
+      },
+      {
+        "year": 2025,
+        "month": 7,
+        "month_name": "July",
+        "total_days": 22,
+        "period": {
+          "start": "2025-07-01",
+          "end": "2025-07-31"
+        }
+      }
+    ],
+    "total_months": 2
+  }
+}
+```
+
+### Filter Schedule by Date Range
+```http
+GET /api/v1/schedule/:employeeId/date-range?start_date=2025-07-01&end_date=2025-07-31
+Authorization: Bearer <token>
+```
+
+**Parameters:**
+- `employeeId`: Employee ID (required)
+- `start_date`: Start date in YYYY-MM-DD format (required)
+- `end_date`: End date in YYYY-MM-DD format (required)
 
 **Response:**
 ```json
@@ -427,9 +916,30 @@ Authorization: Bearer <token>
 
 ## 🕒 Attendance Management
 
-### Fetch All Attendance
+### Fetch All Attendance Data (Asynchronous Processing)
 ```http
 POST /api/v1/attendance/fetch-all
+Authorization: Bearer <token>
+```
+
+**Response (HTTP 202 Accepted):**
+```json
+{
+  "success": true,
+  "message": "Attendance fetch process started",
+  "data": {
+    "jobId": "job_abc123_xyz789",
+    "message": "Process is running in background. Use /api/v1/attendance/job-status/:jobId to check progress"
+  },
+  "timestamp": "2025-08-23T14:45:00.476Z"
+}
+```
+
+**Note:** This endpoint now uses asynchronous processing to prevent timeout errors. The process runs in the background and returns immediately with a job ID for status tracking.
+
+### Check Job Status
+```http
+GET /api/v1/attendance/job-status/:jobId
 Authorization: Bearer <token>
 ```
 
@@ -437,16 +947,57 @@ Authorization: Bearer <token>
 ```json
 {
   "success": true,
-  "message": "Attendance fetch process completed",
+  "message": "Job status retrieved",
   "data": {
-    "processed": 50,
-    "success": 48,
-    "failed": 2,
-    "total": 50,
-    "date": "2025-01-15",
-    "results": [...],
-    "hasMoreResults": false
-  }
+    "id": "job_abc123_xyz789",
+    "type": "attendance-fetch",
+    "status": "running", // "pending", "running", "completed", "failed"
+    "triggeredBy": "manual",
+    "createdAt": "2025-08-23T14:45:00.476Z",
+    "updatedAt": "2025-08-23T14:45:30.123Z",
+    "progress": {
+      "currentBatch": 5,
+      "totalBatches": 10,
+      "processedUsers": 25,
+      "totalUsers": 50
+    },
+    "result": null // Will contain results when completed
+  },
+  "timestamp": "2025-08-23T14:46:00.000Z"
+}
+```
+
+### Get All Jobs
+```http
+GET /api/v1/attendance/jobs
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Jobs retrieved",
+  "data": {
+    "jobs": [
+      {
+        "id": "job_abc123_xyz789",
+        "type": "attendance-fetch",
+        "status": "completed",
+        "triggeredBy": "manual",
+        "createdAt": "2025-08-23T14:45:00.476Z",
+        "updatedAt": "2025-08-23T14:47:30.123Z",
+        "duration": 150000
+      }
+    ],
+    "stats": {
+      "total": 1,
+      "running": 0,
+      "completed": 1,
+      "failed": 0
+    }
+  },
+  "timestamp": "2025-08-23T14:48:00.000Z"
 }
 ```
 
@@ -474,6 +1025,229 @@ Authorization: Bearer <token>
 ```http
 GET /api/v1/attendance/migration-stats
 Authorization: Bearer <token>
+```
+
+## 🕐 Cron Job Management
+
+### Get Cron Jobs Status
+```http
+GET /api/v1/cron/status
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Cron jobs status retrieved successfully",
+  "data": {
+    "jobs": {
+      "attendanceFetch": {
+        "name": "Night attendance fetch",
+        "schedule": "0 8 * * 1-5",
+        "timezone": "Asia/Jakarta",
+        "running": true,
+        "lastRun": "2025-01-15T08:00:00.000Z",
+        "nextRun": "2025-01-16T08:00:00.000Z"
+      }
+    },
+    "timestamp": "2025-01-15T10:30:00.000Z"
+  }
+}
+```
+
+### Manually Trigger Attendance Fetch
+```http
+POST /api/v1/cron/trigger/attendance-fetch
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Attendance fetch triggered successfully",
+  "data": {
+    "result": {
+      "jobId": "job_abc123_xyz789",
+      "status": "started",
+      "type": "attendance-fetch"
+    },
+    "triggeredAt": "2025-01-15T10:30:00.000Z",
+    "requestId": "req_123456"
+  }
+}
+```
+
+### Start Specific Cron Job
+```http
+POST /api/v1/cron/start/:jobName
+Authorization: Bearer <token>
+```
+
+**Parameters:**
+- `jobName`: Name of the cron job to start (e.g., "attendanceFetch")
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Job 'attendanceFetch' started successfully",
+  "data": {
+    "jobName": "attendanceFetch",
+    "action": "started",
+    "timestamp": "2025-01-15T10:30:00.000Z"
+  }
+}
+```
+
+### Stop Specific Cron Job
+```http
+POST /api/v1/cron/stop/:jobName
+Authorization: Bearer <token>
+```
+
+**Parameters:**
+- `jobName`: Name of the cron job to stop (e.g., "attendanceFetch")
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Job 'attendanceFetch' stopped successfully",
+  "data": {
+    "jobName": "attendanceFetch",
+    "action": "stopped",
+    "timestamp": "2025-01-15T10:30:00.000Z"
+  }
+}
+```
+
+### Get Cron Configuration
+```http
+GET /api/v1/cron/config
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Cron configuration retrieved successfully",
+  "data": {
+    "attendanceFetch": {
+      "schedule": "0 8 * * 1-5",
+      "timezone": "Asia/Jakarta",
+      "enabled": true,
+      "description": "Fetch attendance data for all employees"
+    },
+    "environment": {
+      "NODE_ENV": "development",
+      "BASE_URL": "http://localhost:5000"
+    }
+  }
+}
+```
+
+## ⚡ Asynchronous Processing
+
+The application implements asynchronous processing for long-running operations to prevent HTTP timeout errors and improve user experience. This is particularly important for attendance data fetching operations that may take several minutes to complete.
+
+### Key Features
+
+#### Background Job Processing
+- **Immediate Response**: API endpoints return immediately with HTTP 202 (Accepted) status
+- **Job Tracking**: Each background process gets a unique job ID for status monitoring
+- **Progress Monitoring**: Real-time progress updates with batch processing information
+- **Status Management**: Track job states (pending, running, completed, failed)
+
+#### Job Queue System
+- **In-Memory Queue**: Lightweight job queue for tracking active processes
+- **Duplicate Prevention**: Prevents multiple instances of the same job type
+- **Job Statistics**: Comprehensive statistics on job execution
+- **Error Handling**: Proper error tracking and reporting for failed jobs
+
+#### Polling-Based Status Checking
+- **Real-time Updates**: Check job status and progress at any time
+- **Timeout Management**: Automatic job timeout after 10 minutes
+- **Result Storage**: Job results are stored and retrievable after completion
+
+### Implementation Details
+
+#### Attendance Fetch Process
+When `/api/v1/attendance/fetch-all` is called:
+1. **Immediate Response**: Returns HTTP 202 with job ID
+2. **Background Processing**: Starts attendance fetching in background
+3. **Batch Processing**: Processes users in batches of 5 for optimal performance
+4. **Progress Updates**: Updates job progress after each batch
+5. **Completion**: Marks job as completed with final results
+
+#### Cron Service Integration
+The cron service has been updated to handle asynchronous responses:
+- **Reduced Timeout**: HTTP requests timeout reduced to 10 seconds
+- **Job Polling**: Polls job status every 5 seconds until completion
+- **Maximum Wait Time**: 10-minute maximum wait time for job completion
+- **Error Recovery**: Proper error handling for job failures
+
+### Usage Examples
+
+#### Starting a Background Job
+```bash
+# Start attendance fetch process
+curl -X POST "http://localhost:5000/api/v1/attendance/fetch-all" \
+  -H "Authorization: Bearer <token>"
+
+# Response: HTTP 202 Accepted
+{
+  "success": true,
+  "message": "Attendance fetch process started",
+  "data": {
+    "jobId": "job_abc123_xyz789",
+    "message": "Process is running in background"
+  }
+}
+```
+
+#### Monitoring Job Progress
+```bash
+# Check job status
+curl "http://localhost:5000/api/v1/attendance/job-status/job_abc123_xyz789" \
+  -H "Authorization: Bearer <token>"
+
+# Response: Current job status
+{
+  "success": true,
+  "data": {
+    "status": "running",
+    "progress": {
+      "currentBatch": 3,
+      "totalBatches": 10,
+      "processedUsers": 15,
+      "totalUsers": 50
+    }
+  }
+}
+```
+
+#### Getting All Jobs
+```bash
+# List all jobs
+curl "http://localhost:5000/api/v1/attendance/jobs" \
+  -H "Authorization: Bearer <token>"
+
+# Response: All jobs with statistics
+{
+  "success": true,
+  "data": {
+    "jobs": [...],
+    "stats": {
+      "total": 5,
+      "running": 1,
+      "completed": 3,
+      "failed": 1
+    }
+  }
+}
 ```
 
 ## ⏰ Automated Cron Jobs
@@ -730,11 +1504,18 @@ All API responses follow a consistent format:
 | 403 | ACCESS_DENIED | Insufficient permissions |
 | 404 | NOT_FOUND | Resource not found |
 | 409 | DUPLICATE_ERROR | Resource already exists |
+| 409 | JOB_ALREADY_RUNNING | Background job is already running |
+| 404 | JOB_NOT_FOUND | Background job not found |
+| 408 | JOB_TIMEOUT | Background job exceeded timeout limit |
+| 500 | JOB_FAILED | Background job execution failed |
 | 413 | FILE_TOO_LARGE | Uploaded file exceeds size limit |
 | 415 | INVALID_FILE_TYPE | File type not supported |
 | 422 | UPLOAD_FAILED | Image upload to ImageKit failed |
 | 404 | IMAGE_NOT_FOUND | Profile image not found |
 | 500 | DELETE_FAILED | Failed to delete image from ImageKit |
+| 400 | INVALID_IMAGE_METADATA | Invalid alt text or caption provided |
+| 413 | IMAGE_SIZE_EXCEEDED | Image file size exceeds maximum limit |
+| 415 | UNSUPPORTED_IMAGE_FORMAT | Image format not supported |
 | 429 | RATE_LIMIT_EXCEEDED | Too many requests |
 | 500 | INTERNAL_ERROR | Server error |
 | 502 | EXTERNAL_API_ERROR | External service error |
@@ -978,6 +1759,10 @@ For support and questions:
 - [x] Automated cron jobs for attendance fetching
 - [x] Cron job authentication and scheduling
 - [x] Multiple cron schedules support
+- [x] **Asynchronous processing for long-running operations**
+- [x] **Background job queue system with status tracking**
+- [x] **Real-time job progress monitoring**
+- [x] **HTTP timeout prevention for attendance fetch operations**
 
 ### Version 2.2 (Future)
 - [ ] GraphQL API support

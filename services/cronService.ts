@@ -4,6 +4,7 @@ import { logger } from '../utils/loggers';
 import { ApiResponse } from '../utils/apiResponse';
 import { DateHelper } from '../utils/dateHelper';
 import { validateEnvironment } from '../config/environment';
+import { jobQueueService } from './jobQueueService';
 
 interface CronJobConfig {
   schedule: string;
@@ -47,18 +48,71 @@ class CronService {
   };
 
   constructor() {
-    // For Railway deployment, use the Railway URL if available
-    // Railway provides RAILWAY_STATIC_URL or we can construct from environment
-    if (process.env.NODE_ENV === 'production' && process.env.RAILWAY_STATIC_URL) {
-      this.baseUrl = `https://${process.env.RAILWAY_STATIC_URL}`;
-    } else if (process.env.NODE_ENV === 'production' && process.env.PORT) {
-      // Fallback for production without Railway URL
-      this.baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT}`;
-    } else {
-      this.baseUrl = process.env.BASE_URL || 'http://localhost:5000';
-    }
+    this.baseUrl = this.determineBaseUrl();
     
-    logger.info(`CronService initialized with base URL: ${this.baseUrl}`);
+    logger.info(`CronService initialized with base URL: ${this.baseUrl}`, {
+      environment: process.env.NODE_ENV,
+      isRailway: this.isRailwayEnvironment(),
+      availableEnvVars: this.getAvailableUrlEnvVars()
+    });
+  }
+
+  /**
+   * Determine the appropriate base URL for the current environment
+   */
+  private determineBaseUrl(): string {
+    // For development environment, always use localhost
+    if (process.env.NODE_ENV !== 'production') {
+      const port = this.config.PORT || '5000';
+      const localUrl = `http://localhost:${port}`;
+      logger.info('Using localhost URL for CronService (development)', { url: localUrl });
+      return localUrl;
+    }
+
+    // Check if running on Railway
+    if (this.isRailwayEnvironment()) {
+      const railwayUrl = process.env.RAILWAY_STATIC_URL || this.config.BASE_URL;
+      if (railwayUrl) {
+        logger.info('Using Railway URL for CronService', { url: railwayUrl });
+        return railwayUrl;
+      }
+    }
+
+    // Check for explicit BASE_URL
+    if (this.config.BASE_URL) {
+      logger.info('Using BASE_URL for CronService', { url: this.config.BASE_URL });
+      return this.config.BASE_URL;
+    }
+
+    // Default to localhost with PORT
+    const port = this.config.PORT || '5000';
+    const defaultUrl = `http://localhost:${port}`;
+    logger.info('Using default localhost URL for CronService', { url: defaultUrl });
+    return defaultUrl;
+  }
+
+  /**
+   * Check if running in Railway environment
+   */
+  private isRailwayEnvironment(): boolean {
+    return !!(process.env.RAILWAY_STATIC_URL || 
+              process.env.RAILWAY_PUBLIC_DOMAIN || 
+              process.env.RAILWAY_DOMAIN ||
+              process.env.RAILWAY_ENVIRONMENT);
+  }
+
+  /**
+   * Get available URL environment variables for debugging
+   */
+  private getAvailableUrlEnvVars(): Record<string, string | undefined> {
+    return {
+      BASE_URL: process.env.BASE_URL,
+      RAILWAY_STATIC_URL: process.env.RAILWAY_STATIC_URL,
+      PUBLIC_DOMAIN: process.env.PUBLIC_DOMAIN,
+      RAILWAY_PUBLIC_DOMAIN: process.env.RAILWAY_PUBLIC_DOMAIN,
+      RAILWAY_DOMAIN: process.env.RAILWAY_DOMAIN,
+      PORT: process.env.PORT
+    };
   }
 
   /**
@@ -136,7 +190,7 @@ class CronService {
   }
 
   /**
-   * Authenticate and get access token
+   * Authenticate and get access token using HTTP request
    */
   private async authenticate(): Promise<string> {
     try {
@@ -145,91 +199,133 @@ class CronService {
         return this.authToken;
       }
 
-      logger.info('Authenticating for cronjob access...');
+      logger.info('Authenticating for cronjob access using HTTP request...');
 
-      const response = await axios.post(`${this.baseUrl}/api/v1/auth/login`, {
-        username: this.credentials.username,
-        password: this.credentials.password
-      }, {
-        headers: {
-          'Content-Type': 'application/json'
+      const response = await axios.post(
+        `${this.baseUrl}/api/v1/auth/login`,
+        {
+          username: this.credentials.username,
+          password: this.credentials.password
         },
-        timeout: 30000
-      });
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'CronService/1.0'
+          },
+          timeout: 10000
+        }
+      );
 
-      const loginData: LoginResponse = response.data;
+      const responseData = response.data;
 
-      if (!loginData.success || !loginData.data.token) {
-        throw new Error('Login failed: Invalid response from auth endpoint');
+      if (!responseData || !responseData.success || !responseData.data?.token) {
+        logger.error('Invalid response structure from auth API:', {
+          hasResponseData: !!responseData,
+          success: responseData?.success,
+          hasData: !!responseData?.data,
+          hasToken: !!responseData?.data?.token,
+          responseData: responseData
+        });
+        throw new Error('Login failed: Invalid response from auth API');
       }
 
-      this.authToken = loginData.data.token;
+      this.authToken = responseData.data.token;
       
       // Set token expiry (assuming 7 days default, subtract 1 hour for safety)
-      const expiryHours = loginData.data.expiresIn === '7d' ? 7 * 24 - 1 : 23;
+      const expiryHours = responseData.data.expiresIn === '7d' ? 7 * 24 - 1 : 23;
       this.tokenExpiry = new Date(Date.now() + expiryHours * 60 * 60 * 1000);
 
       logger.info('Authentication successful for cronjob', {
-        user: loginData.data.user.name,
-        expiresIn: loginData.data.expiresIn
+        user: responseData.data.user.name,
+        expiresIn: responseData.data.expiresIn
       });
 
+      if (!this.authToken) {
+        throw new Error('Auth token is null after authentication');
+      }
       return this.authToken;
 
     } catch (error: any) {
       logger.error('Authentication failed for cronjob:', {
         error: error.message,
-        status: error.response?.status,
-        statusText: error.response?.statusText
+        stack: error.stack
       });
       throw new Error(`Authentication failed: ${error.message}`);
     }
   }
 
   /**
-   * Execute attendance fetch job
+   * Execute attendance fetch job with retry mechanism
    */
   private async executeAttendanceFetch(): Promise<void> {
     const jobId = `attendance-fetch-${Date.now()}`;
     const startTime = new Date();
+    const maxRetries = 3;
+    let lastError: Error | null = null;
     
-    logger.info(`Starting scheduled attendance fetch job`, { jobId, startTime });
+    logger.info(`Starting scheduled attendance fetch job`, { 
+      jobId, 
+      startTime,
+      baseUrl: this.baseUrl,
+      environment: process.env.NODE_ENV
+    });
 
-    try {
-      // Call internal attendance fetch endpoint
-      const result = await this.callAttendanceFetchEndpoint();
-      
-      const endTime = new Date();
-      const duration = endTime.getTime() - startTime.getTime();
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        logger.info(`Attendance fetch attempt ${attempt}/${maxRetries}`, { jobId });
+        
+        // Call internal attendance fetch endpoint
+        const result = await this.callAttendanceFetchEndpoint();
+        
+        const endTime = new Date();
+        const duration = endTime.getTime() - startTime.getTime();
 
-      logger.info('Scheduled attendance fetch completed successfully', {
-        jobId,
-        duration: `${duration}ms`,
-        result: {
-          processed: result.processed,
-          success: result.successCount,
-          failed: result.failedCount,
-          date: result.date
+        logger.info('Scheduled attendance fetch completed successfully', {
+          jobId,
+          attempt,
+          duration: `${duration}ms`,
+          result: {
+            processed: result.processed,
+            success: result.successCount,
+            failed: result.failedCount,
+            date: result.date
+          }
+        });
+
+        // Log summary for monitoring
+        this.logJobSummary('attendance-fetch', true, result, duration);
+        return; // Success, exit retry loop
+
+      } catch (error: any) {
+        lastError = error;
+        logger.warn(`Attendance fetch attempt ${attempt}/${maxRetries} failed`, {
+          jobId,
+          error: error.message,
+          willRetry: attempt < maxRetries
+        });
+
+        // Wait before retry (exponential backoff)
+        if (attempt < maxRetries) {
+          const waitTime = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+          await new Promise(resolve => setTimeout(resolve, waitTime));
         }
-      });
-
-      // Log summary for monitoring
-      this.logJobSummary('attendance-fetch', true, result, duration);
-
-    } catch (error: any) {
-      const endTime = new Date();
-      const duration = endTime.getTime() - startTime.getTime();
-
-      logger.error('Scheduled attendance fetch failed', {
-        jobId,
-        duration: `${duration}ms`,
-        error: error.message,
-        stack: error.stack
-      });
-
-      // Log failure for monitoring
-      this.logJobSummary('attendance-fetch', false, null, duration, error.message);
+      }
     }
+
+    // All retries failed
+    const endTime = new Date();
+    const duration = endTime.getTime() - startTime.getTime();
+
+    logger.error('Scheduled attendance fetch failed after all retries', {
+      jobId,
+      attempts: maxRetries,
+      duration: `${duration}ms`,
+      error: lastError?.message,
+      stack: lastError?.stack
+    });
+
+    // Log failure for monitoring
+    this.logJobSummary('attendance-fetch', false, null, duration, lastError?.message);
   }
 
   /**
@@ -240,60 +336,139 @@ class CronService {
       // Get authentication token
       const token = await this.authenticate();
       
-      // Import attendance controller to call directly (more efficient than HTTP call)
-      const { fetchAttendance } = await import('../controllers/attendanceController');
-      
-      // Create mock request and response objects with auth token
-      const mockReq = {
-        requestId: `cron-${Date.now()}`,
-        headers: {
-          authorization: `Bearer ${token}`
-        },
-        body: {},
-        params: {},
-        query: {},
-        user: {
-          uid: '2405047',
-          name: 'Cron Service',
-          iat: Math.floor(Date.now() / 1000),
-          exp: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60)
+      // Make HTTP request to attendance fetch endpoint with triggeredBy parameter
+      const response = await axios.post(
+        `${this.baseUrl}/api/v1/attendance/fetch-all`,
+        { triggeredBy: 'cron' },
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'CronService/1.0'
+          },
+          timeout: 10000 // Reduced timeout since we expect immediate response
         }
-      } as any;
+      );
 
-      let responseData: any = null;
-      const mockRes = {
-        status: (code: number) => ({
-          json: (data: any) => {
-            responseData = data;
-            return mockRes;
-          }
-        })
-      } as any;
+      const responseData = response.data;
 
-      const mockNext = (error?: any) => {
-        if (error) throw error;
-      };
-
-      // Call the controller method directly
-      await fetchAttendance(mockReq, mockRes, mockNext);
-
-      if (!responseData || !responseData.success) {
-        throw new Error('Attendance fetch returned unsuccessful response');
+      // Handle async response (202 status)
+      if (response.status === 202 && responseData?.success && responseData?.data?.jobId) {
+        const jobId = responseData.data.jobId;
+        logger.info('Attendance fetch started asynchronously', { jobId });
+        
+        // Wait for job completion and return result
+        return await this.waitForJobCompletion(jobId, token);
       }
 
-      return {
-        success: true,
-        processed: responseData.data.processed || 0,
-        successCount: responseData.data.success || 0,
-        failedCount: responseData.data.failed || 0,
-        date: responseData.data.date || DateHelper.getCurrentDateIndonesia(),
-        timestamp: new Date().toISOString()
-      };
+      // Handle legacy synchronous response (200 status)
+      if (response.status === 200 && responseData?.success) {
+        return {
+          success: true,
+          processed: responseData.data.processed || 0,
+          successCount: responseData.data.success || 0,
+          failedCount: responseData.data.failed || 0,
+          date: responseData.data.date || DateHelper.getCurrentDateIndonesia(),
+          timestamp: new Date().toISOString()
+        };
+      }
+
+      // Handle error responses
+      if (response.status === 409) {
+        logger.warn('Attendance fetch already running', responseData);
+        throw new Error('Attendance fetch is already running');
+      }
+
+      logger.error('Invalid response structure from attendance API:', {
+        status: response.status,
+        hasResponseData: !!responseData,
+        success: responseData?.success,
+        hasData: !!responseData?.data,
+        responseData: responseData
+      });
+      throw new Error('Attendance fetch returned unsuccessful response');
 
     } catch (error: any) {
-      logger.error('Failed to call attendance fetch endpoint:', error.message);
-      throw error;
+      if (error.response) {
+        logger.error('HTTP error in attendance fetch:', {
+          status: error.response.status,
+          statusText: error.response.statusText,
+          data: error.response.data
+        });
+        throw new Error(`Attendance fetch failed: HTTP ${error.response.status} - ${error.response.data?.error || error.response.statusText}`);
+      } else if (error.request) {
+        logger.error('Network error in attendance fetch:', error.message);
+        throw new Error(`Network error: ${error.message}`);
+      } else {
+        logger.error('Failed to call attendance fetch endpoint:', error.message);
+        throw error;
+      }
     }
+  }
+
+  /**
+   * Wait for async job completion and return result
+   */
+  private async waitForJobCompletion(jobId: string, token: string): Promise<AttendanceFetchResult> {
+    const maxWaitTime = 10 * 60 * 1000; // 10 minutes max wait
+    const pollInterval = 5000; // Poll every 5 seconds
+    const startTime = Date.now();
+    
+    logger.info(`Waiting for job completion: ${jobId}`);
+
+    while (Date.now() - startTime < maxWaitTime) {
+      try {
+        const statusResponse = await axios.get(
+          `${this.baseUrl}/api/v1/attendance/job-status/${jobId}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'User-Agent': 'CronService/1.0'
+            },
+            timeout: 5000
+          }
+        );
+
+        const job = statusResponse.data?.data;
+        
+        if (!job) {
+          throw new Error('Job not found');
+        }
+
+        logger.info(`Job ${jobId} status: ${job.status}`, {
+          progress: job.progress,
+          duration: Date.now() - startTime
+        });
+
+        if (job.status === 'completed') {
+          return {
+            success: true,
+            processed: job.result?.totalUsers || 0,
+            successCount: job.result?.successCount || 0,
+            failedCount: job.result?.failureCount || 0,
+            date: DateHelper.getCurrentDateIndonesia(),
+            timestamp: new Date().toISOString()
+          };
+        }
+
+        if (job.status === 'failed') {
+          throw new Error(`Job failed: ${job.error}`);
+        }
+
+        // Continue polling if job is still running
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+        
+      } catch (error: any) {
+        if (error.response?.status === 404) {
+          throw new Error('Job not found or expired');
+        }
+        logger.error('Error checking job status:', error.message);
+        throw error;
+      }
+    }
+
+    throw new Error(`Job ${jobId} timed out after ${maxWaitTime / 1000} seconds`);
   }
 
   /**
