@@ -69,22 +69,55 @@ class CronService {
       return localUrl;
     }
 
-    // Check if running on Railway
+    // For production environment, prioritize Railway-specific URLs
     if (this.isRailwayEnvironment()) {
-      const railwayUrl = process.env.RAILWAY_STATIC_URL || this.config.BASE_URL;
+      const railwayUrl = this.getRailwayUrl();
+      
       if (railwayUrl) {
         logger.info('Using Railway URL for CronService', { url: railwayUrl });
         return railwayUrl;
       }
     }
 
-    // Check for explicit BASE_URL
+    // Check for explicit BASE_URL, but validate it's not localhost in production
     if (this.config.BASE_URL) {
-      logger.info('Using BASE_URL for CronService', { url: this.config.BASE_URL });
-      return this.config.BASE_URL;
+      const baseUrl = this.config.BASE_URL.trim();
+      
+      // In production, reject localhost URLs
+      if (process.env.NODE_ENV === 'production' && baseUrl.includes('localhost')) {
+        logger.warn('BASE_URL contains localhost in production environment, ignoring', { baseUrl });
+      } else {
+        logger.info('Using BASE_URL for CronService', { url: baseUrl });
+        return baseUrl;
+      }
     }
 
-    // Default to localhost with PORT
+    // For production without proper URL configuration, try to get Railway URL from environment
+    if (process.env.NODE_ENV === 'production') {
+      // Log all available environment variables for debugging
+      logger.error('No valid production URL found, available environment variables:', {
+        envVars: this.getAvailableUrlEnvVars(),
+        isRailway: this.isRailwayEnvironment()
+      });
+      
+      // Try to construct URL from available Railway environment variables
+      const railwayUrl = this.getRailwayUrl();
+      if (railwayUrl) {
+        logger.info('Found Railway URL in fallback', { url: railwayUrl });
+        return railwayUrl;
+      }
+      
+      // Last resort: provide helpful error message
+      const errorUrl = 'https://RAILWAY_URL_NOT_CONFIGURED.railway.app';
+      logger.error('No Railway URL found, manual configuration required', { 
+        url: errorUrl,
+        suggestion: 'Please check Railway dashboard for your public domain and set BASE_URL accordingly',
+        example: 'BASE_URL=https://your-service-name.up.railway.app'
+      });
+      return errorUrl;
+    }
+
+    // Fallback to localhost (should only happen in development)
     const port = this.config.PORT || '5000';
     const defaultUrl = `http://localhost:${port}`;
     logger.info('Using default localhost URL for CronService', { url: defaultUrl });
@@ -98,7 +131,76 @@ class CronService {
     return !!(process.env.RAILWAY_STATIC_URL || 
               process.env.RAILWAY_PUBLIC_DOMAIN || 
               process.env.RAILWAY_DOMAIN ||
-              process.env.RAILWAY_ENVIRONMENT);
+              process.env.RAILWAY_ENVIRONMENT ||
+              process.env.RAILWAY_PROJECT_ID ||
+              process.env.RAILWAY_SERVICE_ID);
+  }
+
+  /**
+   * Validate URL format
+   */
+  private isValidUrl(url: string): boolean {
+    try {
+      const urlObj = new URL(url);
+      return urlObj.protocol === 'http:' || urlObj.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Validate production URL
+   */
+  private validateProductionUrl(url: string): { valid: boolean; error?: string } {
+    if (!url) {
+      return { valid: false, error: 'URL is empty or undefined' };
+    }
+
+    if (!this.isValidUrl(url)) {
+      return { valid: false, error: 'URL format is invalid' };
+    }
+
+    if (url.includes('localhost') && process.env.NODE_ENV === 'production') {
+      return { valid: false, error: 'localhost URL cannot be used in production' };
+    }
+
+    if (url.includes('RAILWAY_URL_NOT_CONFIGURED')) {
+      return { valid: false, error: 'Railway URL is not properly configured' };
+    }
+
+    return { valid: true };
+  }
+
+  /**
+   * Get the correct Railway URL for the current deployment
+   */
+  private getRailwayUrl(): string | null {
+    // Railway provides different environment variables for the public URL
+    const possibleUrls = [
+      process.env.RAILWAY_STATIC_URL,
+      process.env.RAILWAY_PUBLIC_DOMAIN,
+      process.env.RAILWAY_DOMAIN,
+      // Construct URL from Railway project info if available
+      process.env.RAILWAY_PROJECT_DOMAIN
+    ];
+
+    for (const url of possibleUrls) {
+      if (url && url.trim()) {
+        const cleanUrl = url.trim();
+        // Ensure URL has proper protocol
+        return cleanUrl.startsWith('http') ? cleanUrl : `https://${cleanUrl}`;
+      }
+    }
+
+    // If no direct URL is available, try to construct from Railway service info
+    if (process.env.RAILWAY_PROJECT_ID && process.env.RAILWAY_SERVICE_ID) {
+      // This is a fallback pattern, actual URL might be different
+      const constructedUrl = `https://${process.env.RAILWAY_SERVICE_ID}-${process.env.RAILWAY_PROJECT_ID}.up.railway.app`;
+      logger.info('Constructed Railway URL from project info', { url: constructedUrl });
+      return constructedUrl;
+    }
+
+    return null;
   }
 
   /**
@@ -111,7 +213,12 @@ class CronService {
       PUBLIC_DOMAIN: process.env.PUBLIC_DOMAIN,
       RAILWAY_PUBLIC_DOMAIN: process.env.RAILWAY_PUBLIC_DOMAIN,
       RAILWAY_DOMAIN: process.env.RAILWAY_DOMAIN,
-      PORT: process.env.PORT
+      RAILWAY_PROJECT_DOMAIN: process.env.RAILWAY_PROJECT_DOMAIN,
+      RAILWAY_PROJECT_ID: process.env.RAILWAY_PROJECT_ID,
+      RAILWAY_SERVICE_ID: process.env.RAILWAY_SERVICE_ID,
+      RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT,
+      PORT: process.env.PORT,
+      NODE_ENV: process.env.NODE_ENV
     };
   }
 
@@ -199,10 +306,38 @@ class CronService {
         return this.authToken;
       }
 
-      logger.info('Authenticating for cronjob access using HTTP request...');
+      logger.info('Authenticating for cronjob access using HTTP request...', {
+        baseUrl: this.baseUrl,
+        loginUrl: `${this.baseUrl}/api/v1/auth/login`,
+        username: this.credentials.username,
+        environment: process.env.NODE_ENV,
+        isRailway: this.isRailwayEnvironment()
+      });
+
+      // Validate URL before making request
+      const urlValidation = this.validateProductionUrl(this.baseUrl);
+      if (!urlValidation.valid) {
+        logger.error('Invalid base URL for cron authentication', {
+          baseUrl: this.baseUrl,
+          error: urlValidation.error,
+          environment: process.env.NODE_ENV,
+          isRailway: this.isRailwayEnvironment(),
+          availableEnvVars: this.getAvailableUrlEnvVars()
+        });
+        
+        // Provide helpful error message
+        const helpMessage = process.env.NODE_ENV === 'production' && this.isRailwayEnvironment() 
+          ? 'Please set BASE_URL to your Railway public domain (e.g., https://your-app.up.railway.app)'
+          : 'Please check your BASE_URL configuration';
+          
+        throw new Error(`${urlValidation.error}. ${helpMessage}`);
+      }
+
+      const loginUrl = `${this.baseUrl}/api/v1/auth/login`;
+      logger.info('Making authentication request', { url: loginUrl });
 
       const response = await axios.post(
-        `${this.baseUrl}/api/v1/auth/login`,
+        loginUrl,
         {
           username: this.credentials.username,
           password: this.credentials.password
