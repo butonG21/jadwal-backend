@@ -15,6 +15,7 @@ import userRoutes from './routes/userRoute';
 import authRoutes from './routes/authRoutes';
 import attendanceRoutes from './routes/attendance';
 import cronRoutes from './routes/cronRoutes';
+import latenessRoutes from './routes/lateness';
 
 // Services
 import { cronService } from './services/cronService';
@@ -141,12 +142,14 @@ class Application {
     this.app.use(`${apiV1}/auth`, authRoutes);
     this.app.use(`${apiV1}/attendance`, attendanceRoutes);
     this.app.use(`${apiV1}/cron`, cronRoutes);
+    this.app.use(`${apiV1}/lateness`, latenessRoutes);
 
     // Backward compatibility - keep old routes
     this.app.use('/api/schedule', scheduleRoutes);
     this.app.use('/api/users', userRoutes);
     this.app.use('/api/auth', authRoutes);
     this.app.use('/api/attendance', attendanceRoutes);
+    this.app.use('/api/lateness', latenessRoutes);
 
     // Root endpoint with API documentation
     this.app.get('/', this.rootEndpoint.bind(this));
