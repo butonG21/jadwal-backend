@@ -38,6 +38,18 @@ A robust, scalable Node.js/Express backend API for employee scheduling and atten
 - **Secure Upload**: Rate-limited uploads with file type and size validation
 - **Metadata Management**: Support for alt text and captions
 
+### Lateness Calculation Features
+- **Comprehensive Lateness Detection**: Calculates start lateness, break lateness, and total lateness minutes
+- **Statistical Reporting**: Provides detailed statistics including:
+  - Average start lateness (in readable format)
+  - Total late minutes (in readable format)
+  - Attendance rate and punctuality rate
+  - Breakdown of on-time, late, very late, and absent days
+- **Period-based Analysis**: Supports daily, weekly, and monthly statistics
+- **Employee-specific Reporting**: Includes employee name and period in all reports
+- **Accurate Working Minutes Calculation**: Calculates actual working minutes based on shift schedule
+- **Absence Detection**: Automatically detects absent days when all attendance times are 00:00:00
+
 ## 📋 Prerequisites
 
 Before running this application, make sure you have the following installed:
@@ -199,6 +211,130 @@ All protected endpoints require a Bearer token in the Authorization header:
 ```bash
 Authorization: Bearer <your-jwt-token>
 ```
+
+## ⏰ Lateness Calculation Endpoints
+
+### Calculate Lateness for a Specific Date
+- **Route**: `POST /api/lateness/calculate/date/:employeeId`
+- **Description**: Menghitung keterlambatan untuk satu karyawan pada tanggal tertentu. Endpoint ini akan memproses data kehadiran karyawan untuk tanggal yang diberikan dan menentukan apakah ada keterlambatan masuk kerja atau keterlambatan setelah istirahat.
+- **Access**: Private (membutuhkan token autentikasi)
+- **Parameters**:
+  - `employeeId` (path): ID unik karyawan yang akan dihitung keterlambatannya.
+  - `date` (query, optional): Tanggal dalam format YYYY-MM-DD. Jika tidak disediakan, akan menggunakan tanggal hari ini.
+- **Example**:
+  ```
+  POST /api/lateness/calculate/date/EMP001?date=2024-01-15
+  ```
+- **Response**: Mengembalikan objek yang berisi detail keterlambatan (start lateness, break lateness, total late minutes) dan status kehadiran untuk tanggal tersebut.
+
+### Calculate Lateness for a Date Range
+- **Route**: `POST /api/lateness/calculate/range/:employeeId`
+- **Description**: Menghitung keterlambatan untuk satu karyawan dalam rentang tanggal yang ditentukan. Endpoint ini akan mengulang perhitungan keterlambatan harian untuk setiap tanggal dalam rentang yang diberikan.
+- **Access**: Private (membutuhkan token autentikasi)
+- **Parameters**:
+  - `employeeId` (path): ID unik karyawan.
+  - `startDate` (query): Tanggal mulai rentang dalam format YYYY-MM-DD.
+  - `endDate` (query): Tanggal akhir rentang dalam format YYYY-MM-DD.
+  - `saveToDb` (query, optional): Nilai boolean (`true`/`false`) untuk menyimpan hasil perhitungan ke database. Defaultnya adalah `false`.
+- **Example**:
+  ```
+  POST /api/lateness/calculate/range/EMP001?startDate=2024-01-01&endDate=2024-01-31&saveToDb=true
+  ```
+- **Response**: Mengembalikan array objek yang berisi detail keterlambatan dan status kehadiran untuk setiap hari dalam rentang tanggal.
+
+### Calculate Lateness for a Month
+- **Route**: `POST /api/lateness/calculate/month/:employeeId`
+- **Description**: Menghitung keterlambatan untuk satu karyawan selama satu bulan penuh. Endpoint ini akan mengagregasi data keterlambatan harian untuk menghasilkan statistik bulanan.
+- **Access**: Private (membutuhkan token autentikasi)
+- **Parameters**:
+  - `employeeId` (path): ID unik karyawan.
+  - `month` (query): Bulan (angka 1-12).
+  - `year` (query): Tahun (misalnya, 2024).
+  - `saveToDb` (query, optional): Nilai boolean (`true`/`false`) untuk menyimpan hasil perhitungan ke database. Defaultnya adalah `false`.
+- **Example**:
+  ```
+  POST /api/lateness/calculate/month/EMP001?month=1&year=2024&saveToDb=true
+  ```
+- **Response**: Mengembalikan objek yang berisi statistik keterlambatan bulanan, termasuk total hari kerja, tingkat kehadiran, tingkat ketepatan waktu, dan rata-rata jam kerja.
+
+### Get Lateness Data
+- **Route**: `GET /api/lateness/data/:employeeId`
+- **Description**: Mengambil data keterlambatan yang sudah tersimpan di database untuk karyawan tertentu. Data dapat difilter berdasarkan tanggal spesifik atau rentang tanggal.
+- **Access**: Private (membutuhkan token autentikasi)
+- **Parameters**:
+  - `employeeId` (path): ID unik karyawan.
+  - `date` (query, optional): Tanggal spesifik dalam format YYYY-MM-DD untuk mengambil data satu hari.
+  - `startDate` (query, optional): Tanggal mulai rentang dalam format YYYY-MM-DD.
+  - `endDate` (query, optional): Tanggal akhir rentang dalam format YYYY-MM-DD.
+- **Example**:
+  ```
+  GET /api/lateness/data/EMP001?startDate=2024-01-01&endDate=2024-01-31
+  ```
+- **Response**: Mengembalikan array objek data keterlambatan yang sesuai dengan kriteria filter.
+
+### Get Lateness Statistics
+- **Route**: `GET /api/lateness/stats/:employeeId?`
+- **Description**: Mengambil statistik keterlambatan untuk karyawan tertentu atau untuk semua karyawan dalam rentang tanggal yang diberikan. Statistik mencakup rata-rata keterlambatan, total menit keterlambatan, tingkat kehadiran, dan rincian status kehadiran.
+- **Access**: Private (membutuhkan token autentikasi)
+- **Parameters**:
+  - `employeeId` (path, optional): ID unik karyawan. Jika tidak disediakan, akan mengembalikan statistik untuk semua karyawan.
+  - `startDate` (query, optional): Tanggal mulai rentang dalam format YYYY-MM-DD.
+  - `endDate` (query, optional): Tanggal akhir rentang dalam format YYYY-MM-DD.
+- **Example**:
+  ```
+  GET /api/lateness/stats/EMP001?startDate=2024-01-01&endDate=2024-01-31
+  ```
+- **Response**: Mengembalikan objek statistik keterlambatan yang terperinci.
+
+### Get Late Employees
+- **Route**: `GET /api/lateness/late-employees`
+- **Description**: Mengambil daftar karyawan yang terdeteksi terlambat pada tanggal tertentu. Endpoint ini berguna untuk melihat ringkasan cepat siapa saja yang terlambat pada hari itu.
+- **Access**: Private (membutuhkan token autentikasi)
+- **Parameters**:
+  - `date` (query, optional): Tanggal dalam format YYYY-MM-DD. Jika tidak disediakan, akan menggunakan tanggal hari ini.
+- **Example**:
+  ```
+  GET /api/lateness/late-employees?date=2024-01-15
+  ```
+- **Response**: Mengembalikan array objek karyawan yang terlambat, beserta detail keterlambatan mereka.
+
+### Bulk Lateness Calculation (Admin Only)
+- **Route**: `POST /api/lateness/calculate/bulk`
+- **Description**: Menghitung keterlambatan untuk beberapa karyawan sekaligus. Endpoint ini dirancang untuk penggunaan administratif dan membutuhkan peran `admin`.
+- **Access**: Private (membutuhkan token autentikasi dengan peran `admin`)
+- **Body**:
+  ```json
+  {
+    "employeeIds": ["string"], // Array ID karyawan yang akan diproses
+    "date"?: "string",        // Tanggal spesifik (YYYY-MM-DD) jika perhitungan harian
+    "startDate"?: "string",   // Tanggal mulai (YYYY-MM-DD) jika perhitungan rentang
+    "endDate"?: "string",     // Tanggal akhir (YYYY-MM-DD) jika perhitungan rentang
+    "saveToDb"?: "boolean"    // Menyimpan hasil ke database (default: false)
+  }
+  ```
+- **Example**:
+  ```
+  POST /api/lateness/calculate/bulk
+  Content-Type: application/json
+
+  {
+    "employeeIds": ["EMP001", "EMP002"],
+    "startDate": "2024-01-01",
+    "endDate": "2024-01-31",
+    "saveToDb": true
+  }
+  ```
+- **Response**: Mengembalikan ringkasan proses bulk, termasuk jumlah karyawan yang berhasil diproses, yang gagal, dan detail hasilnya.
+
+### Lateness Service Health Check
+- **Route**: `GET /api/lateness/health`
+- **Description**: Melakukan pemeriksaan kesehatan pada layanan perhitungan keterlambatan untuk memastikan semua komponen (misalnya, koneksi database) berfungsi dengan baik.
+- **Access**: Private (membutuhkan token autentikasi)
+- **Example**:
+  ```
+  GET /api/lateness/health
+  ```
+- **Response**: Mengembalikan status kesehatan layanan, termasuk `success: true` jika sehat, dan informasi tambahan seperti timestamp.
 
 ### Rate Limiting
 The API implements rate limiting to prevent abuse and ensure fair usage:
