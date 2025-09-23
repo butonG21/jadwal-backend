@@ -1,13 +1,15 @@
-import Lateness, { ILateness, ILatenessMethods } from '../models/Lateness';
-import Schedule, { ISchedule } from '../models/schedule';
-import Attendance, { IAttendance } from '../models/Attendance';
+import Lateness, { ILateness } from '../models/Lateness';
+import Schedule from '../models/schedule';
+import Attendance from '../models/Attendance';
 import { logger } from '../utils/loggers';
 import { AppError } from '../utils/errorTypes';
-import { DateHelper } from '../utils/dateHelper';
-import { SHIFT_SCHEDULES, LATENESS_STATUS, SCHEDULE_TYPES, SHIFT_NUMBER_MAPPING } from '../config/constants';
-import { Document } from 'mongoose';
+import { 
+  SHIFT_SCHEDULES, 
+  SCHEDULE_TYPES, 
+  SHIFT_NUMBER_MAPPING
+} from '../config/constants';
 
-interface LatenessCalculationResult {
+interface LatenessData {
   userid: string;
   name?: string;
   date: string;
@@ -21,36 +23,95 @@ interface LatenessCalculationResult {
   start_lateness_minutes: number;
   end_lateness_minutes: number;
   break_lateness_minutes: number;
-  attendance_status: string;
-  break_status: string;
+  attendance_status: 'on_time' | 'late' | 'very_late' | 'absent' | 'off_day' | 'early_departure' | 'incomplete_attendance';
+  break_status: 'normal' | 'long_break' | 'no_break';
   total_working_minutes: number;
   is_complete_attendance: boolean;
-  start_lateness_display?: string;
-  end_lateness_display?: string;
-  break_lateness_display?: string;
-}
-
-interface LatenessStats {
-  totalRecords: number;
-  onTimeCount: number;
-  lateCount: number;
-  veryLateCount: number;
-  absentCount: number;
-  averageStartLateness: number;
-  averageBreakLateness: number;
-  averageWorkingHours: number;
-  longBreakCount: number;
 }
 
 export class LatenessService {
-  
+  /**
+   * Simpan hasil perhitungan ke database dengan validasi yang lebih baik
+   */
+  async saveLatenessData(latenessData: LatenessData): Promise<ILateness> {
+    try {
+      // Validasi data input
+      if (!latenessData) {
+        throw new AppError('Lateness data is required', 400);
+      }
+
+      if (!latenessData.userid || !latenessData.date) {
+        throw new AppError('User ID and date are required', 400);
+      }
+
+      // Validasi format tanggal
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRegex.test(latenessData.date)) {
+        throw new AppError('Date must be in YYYY-MM-DD format', 400);
+      }
+
+      logger.info(`Attempting to save lateness data for user ${latenessData.userid} on ${latenessData.date}`);
+
+      const existingRecord = await Lateness.findByUserAndDate(latenessData.userid, latenessData.date);
+      
+      if (existingRecord) {
+        // Update existing record
+        try {
+          Object.assign(existingRecord, latenessData);
+          const savedRecord = await existingRecord.save();
+          logger.info(`Successfully updated lateness record for user ${latenessData.userid} on ${latenessData.date}`);
+          return savedRecord;
+        } catch (updateError: any) {
+          logger.error(`Failed to update existing lateness record:`, {
+            userid: latenessData.userid,
+            date: latenessData.date,
+            error: updateError.message,
+            stack: updateError.stack
+          });
+          throw new AppError(`Failed to update lateness record: ${updateError.message}`, 500);
+        }
+      } else {
+        // Create new record
+        try {
+          const newRecord = new Lateness(latenessData);
+          const savedRecord = await newRecord.save();
+          logger.info(`Successfully created lateness record for user ${latenessData.userid} on ${latenessData.date}`);
+          return savedRecord;
+        } catch (createError: any) {
+          logger.error(`Failed to create new lateness record:`, {
+            userid: latenessData.userid,
+            date: latenessData.date,
+            error: createError.message,
+            stack: createError.stack,
+            data: latenessData
+          });
+          throw new AppError(`Failed to create lateness record: ${createError.message}`, 500);
+        }
+      }
+    } catch (error: any) {
+      logger.error(`Failed to save lateness data:`, {
+        userid: latenessData?.userid || 'unknown',
+        date: latenessData?.date || 'unknown',
+        error: error.message,
+        stack: error.stack
+      });
+      
+      // Re-throw AppError as is, wrap other errors
+      if (error instanceof AppError) {
+        throw error;
+      } else {
+        throw new AppError(`Database error while saving lateness data: ${error.message}`, 500);
+      }
+    }
+  }
+
   /**
    * Hitung keterlambatan untuk satu karyawan pada tanggal tertentu
    */
-  async calculateLatenessForUser(userid: string, date: string): Promise<LatenessCalculationResult | null> {
+  async calculateLatenessForUser(userid: string, date: string): Promise<LatenessData | null> {
     try {
       logger.info(`Calculating lateness for user ${userid} on ${date}`);
-      
+
       // 1. Ambil jadwal karyawan
       const schedule = await Schedule.findByEmployeeId(userid);
       if (!schedule) {
@@ -58,7 +119,7 @@ export class LatenessService {
       }
 
       // 2. Cari jadwal untuk tanggal tertentu
-      const daySchedule = schedule.schedule.find(s => s.date === date);
+      const daySchedule = schedule.schedule.find((s: any) => s.date === date);
       if (!daySchedule) {
         logger.warn(`No schedule found for user ${userid} on ${date}`);
         return null;
@@ -70,41 +131,37 @@ export class LatenessService {
       }
 
       // 4. Ambil konfigurasi shift
-      // Gunakan shift angka langsung, fallback ke mapping jika tidak ada
-      let shiftConfig = SHIFT_SCHEDULES[daySchedule.shift as keyof typeof SHIFT_SCHEDULES];
+      let shiftConfig = SHIFT_SCHEDULES[daySchedule.shift];
       let shiftDisplayName = daySchedule.shift;
-      
+
       if (!shiftConfig) {
-        // Fallback: gunakan mapping ke nama shift jika shift angka tidak ditemukan
-        const mappedShiftName = SHIFT_NUMBER_MAPPING[daySchedule.shift as keyof typeof SHIFT_NUMBER_MAPPING];
+        const mappedShiftName = SHIFT_NUMBER_MAPPING[daySchedule.shift];
         if (mappedShiftName) {
-          shiftConfig = SHIFT_SCHEDULES[mappedShiftName as keyof typeof SHIFT_SCHEDULES];
+          shiftConfig = SHIFT_SCHEDULES[mappedShiftName];
           shiftDisplayName = mappedShiftName;
         }
       } else {
-        // Jika shift angka ditemukan, gunakan category sebagai display name
         shiftDisplayName = shiftConfig.category || daySchedule.shift;
       }
-      
+
       if (!shiftConfig) {
         throw new AppError(`Invalid shift type: ${daySchedule.shift}`, 400);
       }
 
       // 5. Ambil data kehadiran
       const attendance = await Attendance.findByUserAndDate(userid, date);
-      
+
       // 6. Hitung keterlambatan
       const result = this.calculateLateness(
         userid,
         schedule.name,
         date,
-        shiftDisplayName, // Gunakan shiftDisplayName untuk tampilan
+        shiftDisplayName,
         shiftConfig,
         attendance
       );
 
       return result;
-      
     } catch (error: any) {
       logger.error(`Failed to calculate lateness for user ${userid}:`, {
         userid,
@@ -116,17 +173,13 @@ export class LatenessService {
   }
 
   /**
-   * Hitung keterlambatan untuk multiple users dalam date range
+   * Hitung keterlambatan untuk date range
    */
-  async calculateLatenessForDateRange(
-    userid: string, 
-    startDate: string, 
-    endDate: string
-  ): Promise<LatenessCalculationResult[]> {
+  async calculateLatenessForDateRange(userid: string, startDate: string, endDate: string): Promise<LatenessData[]> {
     try {
       logger.info(`Calculating lateness for user ${userid} from ${startDate} to ${endDate}`);
       
-      const results: LatenessCalculationResult[] = [];
+      const results: LatenessData[] = [];
       const currentDate = new Date(startDate);
       const endDateObj = new Date(endDate);
 
@@ -142,7 +195,6 @@ export class LatenessService {
       }
 
       return results;
-      
     } catch (error: any) {
       logger.error(`Failed to calculate lateness for date range:`, {
         userid,
@@ -157,17 +209,12 @@ export class LatenessService {
   /**
    * Hitung keterlambatan untuk satu bulan
    */
-  async calculateLatenessForMonth(
-    userid: string, 
-    month: number, 
-    year: number
-  ): Promise<LatenessCalculationResult[]> {
+  async calculateLatenessForMonth(userid: string, month: number, year: number): Promise<LatenessData[]> {
     try {
       const startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
       const endDate = `${year}-${month.toString().padStart(2, '0')}-31`;
       
       return await this.calculateLatenessForDateRange(userid, startDate, endDate);
-      
     } catch (error: any) {
       logger.error(`Failed to calculate lateness for month:`, {
         userid,
@@ -180,60 +227,23 @@ export class LatenessService {
   }
 
   /**
-   * Simpan hasil perhitungan ke database
-   */
-  async saveLatenessData(latenessData: LatenessCalculationResult): Promise<ILateness & ILatenessMethods & Document> {
-    try {
-      const existingRecord = await Lateness.findByUserAndDate(latenessData.userid, latenessData.date);
-      
-      if (existingRecord) {
-        // Update existing record
-        Object.assign(existingRecord, latenessData);
-        const savedRecord = await existingRecord.save();
-        logger.info(`Updated lateness record for user ${latenessData.userid} on ${latenessData.date}`);
-        return savedRecord as unknown as (ILateness & ILatenessMethods & Document);
-      } else {
-        // Create new record
-        const newRecord = new Lateness(latenessData);
-        const savedRecord = await newRecord.save();
-        logger.info(`Created lateness record for user ${latenessData.userid} on ${latenessData.date}`);
-        return savedRecord as unknown as (ILateness & ILatenessMethods & Document);
-      }
-      
-    } catch (error: any) {
-      logger.error(`Failed to save lateness data:`, {
-        userid: latenessData.userid,
-        date: latenessData.date,
-        error: error.message
-      });
-      throw new AppError('Failed to save lateness data', 500);
-    }
-  }
-
-  /**
    * Ambil data keterlambatan dari database
    */
-  async getLatenessData(
-    userid: string, 
-    date?: string, 
-    startDate?: string, 
-    endDate?: string
-  ): Promise<(ILateness & ILatenessMethods & Document)[]> {
+  async getLatenessData(userid: string, date?: string, startDate?: string, endDate?: string): Promise<ILateness[]> {
     try {
       let query: any = { userid };
-      
+
       if (date) {
         query.date = date;
         const result = await Lateness.findByUserAndDate(userid, date);
-        return result ? [result as unknown as (ILateness & ILatenessMethods & Document)] : [];
+        return result ? [result] : [];
       } else if (startDate && endDate) {
         const results = await Lateness.findByUserAndDateRange(userid, startDate, endDate);
-        return results as unknown as (ILateness & ILatenessMethods & Document)[];
+        return results;
       } else {
         const results = await Lateness.find(query).sort({ date: -1 }).limit(100);
-        return results as unknown as (ILateness & ILatenessMethods & Document)[];
+        return results;
       }
-      
     } catch (error: any) {
       logger.error(`Failed to get lateness data:`, {
         userid,
@@ -249,11 +259,7 @@ export class LatenessService {
   /**
    * Ambil statistik keterlambatan
    */
-  async getLatenessStats(
-    userid?: string, 
-    startDate?: string, 
-    endDate?: string
-  ): Promise<LatenessStats> {
+  async getLatenessStats(userid?: string, startDate?: string, endDate?: string): Promise<any> {
     try {
       const result = await Lateness.getLatenessStats(userid, startDate, endDate);
       return result[0] || {
@@ -267,7 +273,6 @@ export class LatenessService {
         averageWorkingHours: 0,
         longBreakCount: 0
       };
-      
     } catch (error: any) {
       logger.error(`Failed to get lateness statistics:`, {
         userid,
@@ -279,140 +284,8 @@ export class LatenessService {
     }
   }
 
-  /**
-   * Core logic untuk menghitung keterlambatan
-   */
-  private calculateLateness(
-    userid: string,
-    name: string,
-    date: string,
-    shift: string,
-    shiftConfig: any,
-    attendance: IAttendance | null
-  ): LatenessCalculationResult {
-    
-    const result: LatenessCalculationResult = {
-      userid,
-      name,
-      date,
-      shift,
-      scheduled_start_time: shiftConfig.start_time,
-      scheduled_end_time: shiftConfig.end_time,
-      start_lateness_minutes: 0,
-      end_lateness_minutes: 0,
-      break_lateness_minutes: 0,
-      attendance_status: LATENESS_STATUS.ABSENT,
-      break_status: 'no_break',
-      total_working_minutes: 0,
-      is_complete_attendance: false
-    };
-
-    // Jika tidak ada data kehadiran
-    if (!attendance || !attendance.start_time) {
-      return result;
-    }
-
-    // Cek apakah semua waktu adalah 00:00:00 (dianggap absent)
-    const isAllTimeEmpty = (
-      attendance.start_time === '00:00:00' &&
-      attendance.end_time === '00:00:00' &&
-      attendance.break_out_time === '00:00:00' &&
-      attendance.break_in_time === '00:00:00'
-    );
-
-    if (isAllTimeEmpty) {
-      result.actual_start_time = attendance.start_time;
-      result.actual_end_time = attendance.end_time;
-      result.actual_break_out_time = attendance.break_out_time;
-      result.actual_break_in_time = attendance.break_in_time;
-      result.attendance_status = LATENESS_STATUS.ABSENT;
-      return result;
-    }
-
-    result.actual_start_time = attendance.start_time;
-    result.actual_end_time = attendance.end_time;
-    result.actual_break_out_time = attendance.break_out_time;
-    result.actual_break_in_time = attendance.break_in_time;
-
-    // Hitung keterlambatan masuk (positif jika terlambat, negatif jika lebih awal)
-    const rawStartLateness = this.calculateTimeDifferenceInMinutes(
-      attendance.start_time,
-      shiftConfig.start_time
-    );
-    // Terapkan toleransi 1 menit untuk keterlambatan masuk
-    result.start_lateness_minutes = rawStartLateness <= 1 ? 0 : rawStartLateness;
-    result.start_lateness_display = this.formatMinutesToReadable(result.start_lateness_minutes);
-
-    // Hitung keterlambatan pulang (positif jika pulang terlambat, negatif jika pulang lebih awal)
-    if (attendance.end_time) {
-      const rawEndLateness = this.calculateTimeDifferenceInMinutes(
-        attendance.end_time,
-        shiftConfig.end_time
-      );
-      // Terapkan toleransi 1 menit untuk keterlambatan pulang
-      result.end_lateness_minutes = rawEndLateness <= 1 && rawEndLateness >= -1 ? 0 : rawEndLateness;
-      result.end_lateness_display = this.formatMinutesToReadable(result.end_lateness_minutes);
-      result.is_complete_attendance = true;
-    } else {
-      result.end_lateness_display = '0 menit';
-    }
-
-    // Hitung keterlambatan break
-    if (attendance.break_out_time && attendance.break_in_time) {
-      const breakDurationMinutes = Math.abs(this.calculateTimeDifferenceInMinutes(
-        attendance.break_out_time,
-        attendance.break_in_time
-      ));
-      
-      const allowedBreakMinutes = shiftConfig.break_duration_minutes;
-      result.break_lateness_minutes = Math.max(0, breakDurationMinutes - allowedBreakMinutes);
-      
-      if (breakDurationMinutes > allowedBreakMinutes) {
-        result.break_status = 'long_break';
-      } else {
-        result.break_status = 'normal';
-      }
-      result.break_lateness_display = this.formatMinutesToReadable(result.break_lateness_minutes);
-    } else {
-      result.break_lateness_display = '0 menit';
-    }
-
-    // Hitung total jam kerja berdasarkan jadwal shift (start_time + end_time)
-    if (attendance.start_time && attendance.end_time && 
-        attendance.start_time !== '00:00:00' && attendance.end_time !== '00:00:00') {
-      // Hitung total waktu kerja berdasarkan jadwal shift
-      let totalMinutes = this.calculateTimeDifferenceInMinutes(
-        shiftConfig.start_time,
-        shiftConfig.end_time
-      );
-      
-      // Kurangi waktu break yang diizinkan
-      if (shiftConfig.break_duration_minutes) {
-        totalMinutes -= shiftConfig.break_duration_minutes;
-      }
-      
-      result.total_working_minutes = Math.max(0, Math.abs(totalMinutes));
-    }
-
-    // Tentukan status kehadiran
-    result.attendance_status = this.determineAttendanceStatus(
-      result.start_lateness_minutes,
-      result.end_lateness_minutes,
-      result.is_complete_attendance
-    );
-
-    return result;
-  }
-
-  /**
-   * Buat result untuk hari libur
-   */
-  private createOffDayResult(
-    userid: string,
-    name: string,
-    date: string,
-    shift: string
-  ): LatenessCalculationResult {
+  // Helper methods (implementasi lengkap akan ditambahkan sesuai kebutuhan)
+  private createOffDayResult(userid: string, name: string, date: string, shift: string): LatenessData {
     return {
       userid,
       name,
@@ -423,88 +296,168 @@ export class LatenessService {
       start_lateness_minutes: 0,
       end_lateness_minutes: 0,
       break_lateness_minutes: 0,
-      attendance_status: LATENESS_STATUS.OFF_DAY,
+      attendance_status: 'off_day',
+      break_status: 'no_break',
+      total_working_minutes: 0,
+      is_complete_attendance: true
+    };
+  }
+
+  private calculateLateness(
+    userid: string,
+    name: string,
+    date: string,
+    shift: string,
+    shiftConfig: any,
+    attendance: any
+  ): LatenessData {
+    // Pastikan format waktu HH:mm:ss
+    const formatTime = (time: string): string => {
+      if (!time) return '00:00:00';
+      if (time.length === 5) return `${time}:00`; // HH:mm -> HH:mm:ss
+      return time;
+    };
+
+    // Helper function untuk cek apakah waktu adalah 00:00:00 (dianggap tidak ada data)
+    const isZeroTime = (time: string): boolean => {
+      if (!time) return true;
+      const formatted = formatTime(time);
+      return formatted === '00:00:00';
+    };
+
+    // Helper function untuk menghitung selisih waktu dalam menit
+    const calculateTimeDifference = (actualTime: string, scheduledTime: string): number => {
+      if (!actualTime || !scheduledTime || isZeroTime(actualTime)) return 0;
+      
+      const actual = new Date(`1970-01-01T${formatTime(actualTime)}`);
+      const scheduled = new Date(`1970-01-01T${formatTime(scheduledTime)}`);
+      
+      return Math.floor((actual.getTime() - scheduled.getTime()) / (1000 * 60));
+    };
+
+    // Inisialisasi data dasar
+    const result: LatenessData = {
+      userid,
+      name,
+      date,
+      shift,
+      scheduled_start_time: formatTime(shiftConfig.start_time),
+      scheduled_end_time: formatTime(shiftConfig.end_time),
+      actual_start_time: attendance?.start_time ? formatTime(attendance.start_time) : undefined,
+      actual_end_time: attendance?.end_time ? formatTime(attendance.end_time) : undefined,
+      actual_break_out_time: attendance?.break_out_time ? formatTime(attendance.break_out_time) : undefined,
+      actual_break_in_time: attendance?.break_in_time ? formatTime(attendance.break_in_time) : undefined,
+      start_lateness_minutes: 0,
+      end_lateness_minutes: 0,
+      break_lateness_minutes: 0,
+      attendance_status: 'absent',
       break_status: 'no_break',
       total_working_minutes: 0,
       is_complete_attendance: false
     };
-  }
 
-  /**
-   * Hitung selisih waktu dalam menit
-   * Untuk keterlambatan: actualTime - scheduledTime
-   * Positif = terlambat, Negatif = lebih awal
-   */
-  private calculateTimeDifferenceInMinutes(actualTime: string, scheduledTime: string): number {
-    const actual = this.timeToMinutes(actualTime);
-    const scheduled = this.timeToMinutes(scheduledTime);
-    
-    // Handle cross-midnight shifts
-    if (actual < scheduled && (scheduled - actual) > 12 * 60) {
-      // Jika selisih lebih dari 12 jam, kemungkinan cross-midnight
-      return (24 * 60 + actual) - scheduled;
+    // Jika tidak ada data attendance, return sebagai absent
+    if (!attendance) {
+      return result;
     }
-    
-    return actual - scheduled;
-  }
 
-  /**
-   * Convert time string (HH:mm:ss) to minutes
-   */
-  private timeToMinutes(timeStr: string): number {
-    const [hours, minutes, seconds] = timeStr.split(':').map(Number);
-    return hours * 60 + minutes + (seconds || 0) / 60;
-  }
+    // Cek apakah start_time atau end_time adalah 00:00:00 (dianggap absent)
+    const hasValidStartTime = attendance.start_time && !isZeroTime(attendance.start_time);
+    const hasValidEndTime = attendance.end_time && !isZeroTime(attendance.end_time);
 
-  /**
-   * Format menit menjadi tampilan yang lebih sederhana
-   * Contoh: 3.5 -> "4 menit", 65.2 -> "1 jam 5 menit"
-   */
-  private formatMinutesToReadable(minutes: number): string {
-    const absMinutes = Math.abs(minutes);
-    const roundedMinutes = Math.round(absMinutes);
-    
-    if (roundedMinutes === 0) {
-      return "0 menit";
+    // Jika start_time dan end_time keduanya 00:00:00 atau tidak ada, dianggap absent
+    if (!hasValidStartTime && !hasValidEndTime) {
+      return result; // status tetap 'absent'
     }
-    
-    if (roundedMinutes < 60) {
-      return `${roundedMinutes} menit`;
-    }
-    
-    const hours = Math.floor(roundedMinutes / 60);
-    const remainingMinutes = roundedMinutes % 60;
-    
-    if (remainingMinutes === 0) {
-      return `${hours} jam`;
-    }
-    
-    return `${hours} jam ${remainingMinutes} menit`;
-  }
 
-  /**
-   * Tentukan status kehadiran berdasarkan keterlambatan
-   */
-  private determineAttendanceStatus(
-    startLatenessMinutes: number,
-    endLatenessMinutes: number,
-    isCompleteAttendance: boolean
-  ): string {
-    
-    // Jika pulang lebih awal dari jadwal (early departure)
-    if (endLatenessMinutes < -30) { // lebih dari 30 menit lebih awal
-      return LATENESS_STATUS.EARLY_DEPARTURE;
+    // Hitung keterlambatan masuk
+    if (hasValidStartTime) {
+      result.start_lateness_minutes = calculateTimeDifference(
+        attendance.start_time,
+        shiftConfig.start_time
+      );
+      
+      // Pastikan tidak negatif (jika datang lebih awal)
+      if (result.start_lateness_minutes < 0) {
+        result.start_lateness_minutes = 0;
+      }
     }
-    
-    // Jika terlambat masuk
-    if (startLatenessMinutes > 60) { // lebih dari 1 jam
-      return LATENESS_STATUS.VERY_LATE;
-    } else if (startLatenessMinutes > 0) {
-      return LATENESS_STATUS.LATE;
+
+    // Hitung keterlambatan pulang (negatif jika pulang lebih awal)
+    if (hasValidEndTime) {
+      result.end_lateness_minutes = calculateTimeDifference(
+        attendance.end_time,
+        shiftConfig.end_time
+      );
     }
-    
-    // Jika tepat waktu
-    return LATENESS_STATUS.ON_TIME;
+
+    // Hitung keterlambatan istirahat
+    if (attendance.break_out_time && attendance.break_in_time && 
+        !isZeroTime(attendance.break_out_time) && !isZeroTime(attendance.break_in_time)) {
+      const breakOutTime = new Date(`1970-01-01T${formatTime(attendance.break_out_time)}`);
+      const breakInTime = new Date(`1970-01-01T${formatTime(attendance.break_in_time)}`);
+      const actualBreakDuration = Math.floor((breakInTime.getTime() - breakOutTime.getTime()) / (1000 * 60));
+      const scheduledBreakDuration = shiftConfig.break_duration_minutes || 60;
+      
+      result.break_lateness_minutes = Math.max(0, actualBreakDuration - scheduledBreakDuration);
+      
+      // Tentukan break status
+      if (actualBreakDuration > scheduledBreakDuration + 15) {
+        result.break_status = 'long_break';
+      } else {
+        result.break_status = 'normal';
+      }
+    } else if (hasValidStartTime && hasValidEndTime) {
+      // Jika ada start dan end time tapi tidak ada break data, set sebagai no_break
+      result.break_status = 'no_break';
+    }
+
+    // Hitung total jam kerja aktual
+    if (hasValidStartTime && hasValidEndTime) {
+      const startTime = new Date(`1970-01-01T${formatTime(attendance.start_time)}`);
+      const endTime = new Date(`1970-01-01T${formatTime(attendance.end_time)}`);
+      let workingMinutes = Math.floor((endTime.getTime() - startTime.getTime()) / (1000 * 60));
+      
+      // Kurangi waktu istirahat jika ada
+      if (attendance.break_out_time && attendance.break_in_time && 
+          !isZeroTime(attendance.break_out_time) && !isZeroTime(attendance.break_in_time)) {
+        const breakOutTime = new Date(`1970-01-01T${formatTime(attendance.break_out_time)}`);
+        const breakInTime = new Date(`1970-01-01T${formatTime(attendance.break_in_time)}`);
+        const breakDuration = Math.floor((breakInTime.getTime() - breakOutTime.getTime()) / (1000 * 60));
+        workingMinutes -= breakDuration;
+      }
+      
+      result.total_working_minutes = Math.max(0, workingMinutes);
+    }
+
+    // Tentukan attendance status berdasarkan keterlambatan
+    if (hasValidStartTime || hasValidEndTime) {
+      // Cek apakah data attendance tidak lengkap
+      if (hasValidStartTime && !hasValidEndTime) {
+        result.attendance_status = 'incomplete_attendance';
+      } else if (!hasValidStartTime && hasValidEndTime) {
+        result.attendance_status = 'incomplete_attendance';
+      } else if (hasValidStartTime && hasValidEndTime) {
+        // Data lengkap, tentukan status berdasarkan keterlambatan
+        if (result.start_lateness_minutes === 0) {
+          result.attendance_status = 'on_time';
+        } else if (result.start_lateness_minutes <= 15) {
+          result.attendance_status = 'late';
+        } else {
+          result.attendance_status = 'very_late';
+        }
+        
+        // Jika pulang lebih awal dari jadwal (early departure)
+        if (result.end_lateness_minutes < -30) {
+          result.attendance_status = 'early_departure';
+        }
+      }
+    }
+
+    // Tentukan apakah data kehadiran lengkap
+    result.is_complete_attendance = !!(hasValidStartTime && hasValidEndTime);
+
+    return result;
   }
 }
 

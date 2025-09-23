@@ -22,17 +22,12 @@ export interface ILateness extends Document {
   break_lateness_minutes: number; // keterlambatan dari istirahat
   
   // Status kehadiran
-  attendance_status: 'on_time' | 'late' | 'very_late' | 'absent' | 'off_day' | 'early_departure';
+  attendance_status: 'on_time' | 'late' | 'very_late' | 'absent' | 'off_day' | 'early_departure' | 'incomplete_attendance';
   break_status: 'normal' | 'long_break' | 'no_break';
   
   // Informasi tambahan
   total_working_minutes: number; // total jam kerja aktual
   is_complete_attendance: boolean; // apakah data kehadiran lengkap
-  
-  // Format tampilan yang mudah dibaca (optional)
-  start_lateness_display?: string;
-  end_lateness_display?: string;
-  break_lateness_display?: string;
   
   createdAt: Date;
   updatedAt: Date;
@@ -77,7 +72,7 @@ const LatenessSchema = new Schema<ILateness, LatenessModel, ILatenessMethods>({
   shift: {
     type: String,
     required: [true, 'Shift is required'],
-    enum: ['Pagi', 'Middle', 'Siang'],
+    enum: ['Pagi', 'Middle', 'Siang', 'OFF', 'CT'],
     index: true
   },
   scheduled_start_time: {
@@ -155,7 +150,7 @@ const LatenessSchema = new Schema<ILateness, LatenessModel, ILatenessMethods>({
   },
   attendance_status: {
     type: String,
-    enum: ['on_time', 'late', 'very_late', 'absent', 'off_day', 'early_departure'],
+    enum: ['on_time', 'late', 'very_late', 'absent', 'off_day', 'early_departure', 'incomplete_attendance'],
     default: 'absent',
     index: true
   },
