@@ -259,19 +259,93 @@ export class LatenessService {
   /**
    * Ambil statistik keterlambatan
    */
-  async getLatenessStats(userid?: string, startDate?: string, endDate?: string): Promise<any> {
+  async getLatenessStats(userid?: string, startDate?: string, endDate?: string, groupBy?: string): Promise<any> {
     try {
-      const result = await Lateness.getLatenessStats(userid, startDate, endDate);
-      return result[0] || {
-        totalRecords: 0,
-        onTimeCount: 0,
-        lateCount: 0,
-        veryLateCount: 0,
-        absentCount: 0,
-        averageStartLateness: 0,
-        averageBreakLateness: 0,
-        averageWorkingHours: 0,
-        longBreakCount: 0
+      // Get lateness data from database
+      const latenessData = await this.getLatenessData(userid || '', undefined, startDate, endDate);
+      
+      if (!latenessData || latenessData.length === 0) {
+        return {
+          employee: null,
+          totalRecords: 0,
+          onTimeCount: 0,
+          lateCount: 0,
+          veryLateCount: 0,
+          absentCount: 0,
+          offDayCount: 0,
+          attendanceRate: 0,
+          punctualityRate: 0,
+          totalLatenessMinutes: 0,
+          averageLatenessPerDay: 0,
+          maxLatenessMinutes: 0,
+          minLatenessMinutes: 0,
+          averageWorkingHours: 0,
+          trends: []
+        };
+      }
+
+      // Get employee information from first record
+      const employee = {
+        id: userid,
+        name: latenessData[0].name || 'Unknown'
+      };
+
+      // Calculate statistics
+      const workingDays = latenessData.filter(r => r.attendance_status !== 'off_day');
+      const presentDays = workingDays.filter(r => r.attendance_status !== 'absent');
+      
+      const onTimeCount = latenessData.filter(r => r.attendance_status === 'on_time').length;
+      const lateCount = latenessData.filter(r => r.attendance_status === 'late').length;
+      const veryLateCount = latenessData.filter(r => r.attendance_status === 'very_late').length;
+      const absentCount = latenessData.filter(r => r.attendance_status === 'absent').length;
+      const offDayCount = latenessData.filter(r => r.attendance_status === 'off_day').length;
+
+      // Calculate lateness minutes
+      const totalStartLateness = latenessData.reduce((sum, r) => sum + Math.max(0, r.start_lateness_minutes), 0);
+      const totalBreakLateness = latenessData.reduce((sum, r) => sum + Math.max(0, r.break_lateness_minutes), 0);
+      const totalLatenessMinutes = totalStartLateness + totalBreakLateness;
+      
+      // Calculate rates
+      const attendanceRate = workingDays.length > 0 ? Math.round((presentDays.length / workingDays.length) * 100) : 0;
+      const punctualityRate = presentDays.length > 0 ? Math.round((onTimeCount / presentDays.length) * 100) : 0;
+      
+      // Calculate average working hours
+      const totalWorkingMinutes = latenessData.reduce((sum, r) => sum + r.total_working_minutes, 0);
+      const averageWorkingHours = presentDays.length > 0 ? Math.round((totalWorkingMinutes / presentDays.length / 60) * 100) / 100 : 0;
+      
+      // Calculate lateness statistics
+      const lateRecords = latenessData.filter(r => r.start_lateness_minutes > 0 || r.break_lateness_minutes > 0);
+      const latenessMinutes = lateRecords.map(r => r.start_lateness_minutes + r.break_lateness_minutes);
+      const maxLatenessMinutes = latenessMinutes.length > 0 ? Math.max(...latenessMinutes) : 0;
+      const minLatenessMinutes = latenessMinutes.length > 0 ? Math.min(...latenessMinutes.filter(m => m > 0)) : 0;
+      const averageLatenessPerDay = lateRecords.length > 0 ? Math.round(totalLatenessMinutes / lateRecords.length) : 0;
+
+      // Generate trends based on groupBy parameter
+      let trends: any[] = [];
+      if (groupBy === 'week' && startDate && endDate) {
+        trends = this.generateWeeklyTrends(latenessData, startDate, endDate);
+      } else if (groupBy === 'month' && startDate && endDate) {
+        trends = this.generateMonthlyTrends(latenessData, startDate, endDate);
+      }
+
+      return {
+        employee,
+        totalRecords: latenessData.length,
+        totalEmployees: userid ? 1 : new Set(latenessData.map(r => r.userid)).size,
+        onTimeCount,
+        lateCount,
+        veryLateCount,
+        absentCount,
+        offDayCount,
+        attendanceRate,
+        punctualityRate,
+        totalLatenessMinutes,
+        averageLatenessPerDay,
+        maxLatenessMinutes,
+        minLatenessMinutes,
+        averageWorkingHours,
+        workingDays: workingDays.length,
+        trends
       };
     } catch (error: any) {
       logger.error(`Failed to get lateness statistics:`, {
@@ -282,6 +356,103 @@ export class LatenessService {
       });
       throw new AppError('Failed to retrieve lateness statistics', 500);
     }
+  }
+
+  private generateWeeklyTrends(latenessData: any[], startDate: string, endDate: string): any[] {
+    const trends: any[] = [];
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    
+    // Group data by week
+    const weeklyData = new Map();
+    
+    latenessData.forEach(record => {
+      const recordDate = new Date(record.date);
+      const weekStart = new Date(recordDate);
+      weekStart.setDate(recordDate.getDate() - recordDate.getDay()); // Start of week (Sunday)
+      const weekKey = weekStart.toISOString().split('T')[0];
+      
+      if (!weeklyData.has(weekKey)) {
+        weeklyData.set(weekKey, []);
+      }
+      weeklyData.get(weekKey).push(record);
+    });
+    
+    // Calculate statistics for each week
+    weeklyData.forEach((records, weekStart) => {
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+      
+      const onTime = records.filter((r: any) => r.attendance_status === 'on_time').length;
+      const late = records.filter((r: any) => r.attendance_status === 'late').length;
+      const veryLate = records.filter((r: any) => r.attendance_status === 'very_late').length;
+      const absent = records.filter((r: any) => r.attendance_status === 'absent').length;
+      const workingDays = records.filter((r: any) => r.attendance_status !== 'off_day').length;
+      const presentDays = workingDays - absent;
+      
+      trends.push({
+        period: `${weekStart} to ${weekEnd.toISOString().split('T')[0]}`,
+        week_start: weekStart,
+        week_end: weekEnd.toISOString().split('T')[0],
+        total_days: records.length,
+        working_days: workingDays,
+        on_time: onTime,
+        late: late,
+        very_late: veryLate,
+        absent: absent,
+        attendance_rate: workingDays > 0 ? Math.round((presentDays / workingDays) * 100) : 0,
+        punctuality_rate: presentDays > 0 ? Math.round((onTime / presentDays) * 100) : 0
+      });
+    });
+    
+    return trends.sort((a, b) => a.week_start.localeCompare(b.week_start));
+  }
+
+  private generateMonthlyTrends(latenessData: any[], startDate: string, endDate: string): any[] {
+    const trends: any[] = [];
+    
+    // Group data by month
+    const monthlyData = new Map();
+    
+    latenessData.forEach(record => {
+      const recordDate = new Date(record.date);
+      const monthKey = `${recordDate.getFullYear()}-${String(recordDate.getMonth() + 1).padStart(2, '0')}`;
+      
+      if (!monthlyData.has(monthKey)) {
+        monthlyData.set(monthKey, []);
+      }
+      monthlyData.get(monthKey).push(record);
+    });
+    
+    // Calculate statistics for each month
+    monthlyData.forEach((records, monthKey) => {
+      const [year, month] = monthKey.split('-');
+      const monthName = new Date(parseInt(year), parseInt(month) - 1).toLocaleString('id-ID', { month: 'long' });
+      
+      const onTime = records.filter((r: any) => r.attendance_status === 'on_time').length;
+      const late = records.filter((r: any) => r.attendance_status === 'late').length;
+      const veryLate = records.filter((r: any) => r.attendance_status === 'very_late').length;
+      const absent = records.filter((r: any) => r.attendance_status === 'absent').length;
+      const workingDays = records.filter((r: any) => r.attendance_status !== 'off_day').length;
+      const presentDays = workingDays - absent;
+      
+      trends.push({
+        period: `${monthName} ${year}`,
+        month: parseInt(month),
+        year: parseInt(year),
+        month_name: monthName,
+        total_days: records.length,
+        working_days: workingDays,
+        on_time: onTime,
+        late: late,
+        very_late: veryLate,
+        absent: absent,
+        attendance_rate: workingDays > 0 ? Math.round((presentDays / workingDays) * 100) : 0,
+        punctuality_rate: presentDays > 0 ? Math.round((onTime / presentDays) * 100) : 0
+      });
+    });
+    
+    return trends.sort((a, b) => a.year - b.year || a.month - b.month);
   }
 
   // Helper methods (implementasi lengkap akan ditambahkan sesuai kebutuhan)
