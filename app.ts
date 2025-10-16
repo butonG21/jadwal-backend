@@ -100,7 +100,7 @@ class Application {
     this.app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
     // Trust proxy for correct IP addresses
-    this.app.set('trust proxy', 1);
+    this.app.set('trust proxy', true);
 
     // Custom middleware for request context
     this.app.use((req, res, next) => {
