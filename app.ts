@@ -45,6 +45,16 @@ class Application {
   }
 
   private initializeMiddleware(): void {
+    // Trust proxy for correct IP addresses
+    this.app.set('trust proxy', true);
+
+
+    this.app.use((req, res, next) => {
+      console.log('Client IP:', req.ip);
+      console.log('Forwarded IPs:', req.headers['x-forwarded-for']);
+      next();
+    });
+    
     // Security middleware
     this.app.use(helmet({
       crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -99,8 +109,6 @@ class Application {
     }));
     this.app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-    // Trust proxy for correct IP addresses
-    this.app.set('trust proxy', true);
 
     // Custom middleware for request context
     this.app.use((req, res, next) => {
