@@ -12,6 +12,11 @@ export class WebhookController {
 
   async handleGitHubWebhook(req: Request, res: Response): Promise<void> {
     try {
+      // Debug logging for request details
+      logger.info(`Webhook request headers: ${JSON.stringify(req.headers)}`);
+      logger.info(`Webhook request body: ${JSON.stringify(req.body)}`);
+      logger.info(`Webhook request content-type: ${req.headers['content-type']}`);
+      
       // Validate GitHub webhook signature if secret is configured
       const signature = req.headers['x-hub-signature-256'] as string;
       const event = req.headers['x-github-event'] as string;
@@ -27,7 +32,19 @@ export class WebhookController {
         return;
       }
 
-      const payload = req.body;
+      // Handle different payload formats (JSON vs form-encoded)
+      let payload = req.body;
+      
+      // If GitHub sends as form-encoded, the payload will be in a 'payload' field
+      if (typeof payload === 'object' && payload.payload && typeof payload.payload === 'string') {
+        try {
+          payload = JSON.parse(payload.payload);
+          logger.info('Parsed form-encoded payload');
+        } catch (error) {
+          logger.error('Failed to parse form-encoded payload:', error);
+        }
+      }
+      
       const branch = payload.ref?.split('/').pop();
       
       // Add debug logging
