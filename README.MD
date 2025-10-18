@@ -148,6 +148,18 @@ ATTENDANCE_CRON_TIMEZONE=Asia/Jakarta
 # Cron Authentication (required for API access)
 CRON_USERNAME=your-cron-username
 CRON_PASSWORD=your-cron-password
+
+# GitHub Webhook Configuration
+WEBHOOK_SECRET=your-github-webhook-secret
+WEBHOOK_ENABLED=true
+DEPLOYMENT_BRANCH=main
+PROJECT_PATH=/path/to/your/project
+
+# Deployment Settings
+AUTO_DEPLOY_ENABLED=true
+DEPLOYMENT_TIMEOUT=300000
+BUILD_COMMAND=npm run build
+START_COMMAND=npm start
 ```
 
 ## 🚀 Installation & Setup
@@ -714,6 +726,263 @@ GET /api/v1/profile/image/user/:userId?size=thumbnail
 ```
 
 **Note:** This endpoint doesn't require authentication and is publicly accessible.
+
+## 🔗 GitHub Webhooks & Deployment
+
+The application includes a comprehensive webhook system for automated deployment and integration with GitHub repositories. This system enables continuous deployment and real-time status monitoring.
+
+### Webhook Endpoints
+
+#### GitHub Webhook Handler
+```http
+POST /webhook/github
+Content-Type: application/json
+```
+
+**Description:** Handles incoming GitHub webhook events for automated deployment triggers.
+
+**Request Headers:**
+```
+X-GitHub-Event: push
+X-GitHub-Delivery: 12345678-1234-1234-1234-123456789012
+X-Hub-Signature-256: sha256=<signature>
+Content-Type: application/json
+```
+
+**Request Body (GitHub Push Event):**
+```json
+{
+  "ref": "refs/heads/main",
+  "before": "abc123...",
+  "after": "def456...",
+  "repository": {
+    "name": "jadwal-backend",
+    "full_name": "username/jadwal-backend",
+    "clone_url": "https://github.com/username/jadwal-backend.git"
+  },
+  "pusher": {
+    "name": "developer",
+    "email": "developer@example.com"
+  },
+  "head_commit": {
+    "id": "def456...",
+    "message": "Fix webhook deployment system",
+    "author": {
+      "name": "Developer Name",
+      "email": "developer@example.com"
+    }
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Webhook received and deployment started",
+  "data": {
+    "event": "push",
+    "repository": "username/jadwal-backend",
+    "branch": "main",
+    "commit": "def456...",
+    "deploymentStarted": true,
+    "timestamp": "2025-01-15T10:30:00.000Z"
+  }
+}
+```
+
+#### Manual Deployment Trigger
+```http
+POST /webhook/deploy
+Content-Type: application/json
+```
+
+**Description:** Manually triggers a deployment process.
+
+**Request Body (Optional):**
+```json
+{
+  "branch": "main",
+  "force": false,
+  "reason": "Manual deployment for hotfix"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Manual deployment started",
+  "data": {
+    "deploymentId": "deploy_1642694400000",
+    "status": "started",
+    "branch": "main",
+    "timestamp": "2025-01-15T10:30:00.000Z",
+    "estimatedDuration": "2-5 minutes"
+  }
+}
+```
+
+#### Deployment Status Check
+```http
+GET /webhook/status
+```
+
+**Description:** Retrieves the current deployment status and system information.
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Deployment status retrieved",
+  "data": {
+    "isDeploying": false,
+    "lastDeployment": {
+      "id": "deploy_1642694400000",
+      "status": "completed",
+      "startTime": "2025-01-15T10:25:00.000Z",
+      "endTime": "2025-01-15T10:28:30.000Z",
+      "duration": "3m 30s",
+      "branch": "main",
+      "commit": "def456...",
+      "success": true
+    },
+    "projectPath": "/path/to/project",
+    "serverStatus": "running",
+    "uptime": "2h 15m 30s",
+    "lastCheck": "2025-01-15T10:30:00.000Z"
+  }
+}
+```
+
+### Webhook Configuration
+
+#### GitHub Repository Setup
+
+1. **Navigate to Repository Settings:**
+   - Go to your GitHub repository
+   - Click on "Settings" tab
+   - Select "Webhooks" from the left sidebar
+
+2. **Add New Webhook:**
+   - Click "Add webhook"
+   - Set Payload URL: `https://your-domain.com/webhook/github`
+   - Content type: `application/json`
+   - Secret: Configure a secure secret token
+   - Events: Select "Push events" or "Send me everything"
+
+3. **Webhook Events:**
+   - **Push Events**: Triggers deployment on code push
+   - **Pull Request**: Can be configured for staging deployments
+   - **Release**: Triggers production deployments
+
+#### Environment Variables for Webhooks
+
+Add these to your `.env` file:
+
+```bash
+# Webhook Configuration
+WEBHOOK_SECRET=your-github-webhook-secret
+WEBHOOK_ENABLED=true
+DEPLOYMENT_BRANCH=main
+PROJECT_PATH=/path/to/your/project
+
+# Deployment Settings
+AUTO_DEPLOY_ENABLED=true
+DEPLOYMENT_TIMEOUT=300000
+BUILD_COMMAND=npm run build
+START_COMMAND=npm start
+```
+
+### Deployment Process
+
+#### Automated Deployment Flow
+
+1. **Webhook Received**: GitHub sends webhook to `/webhook/github`
+2. **Validation**: Verify webhook signature and event type
+3. **Branch Check**: Ensure push is to configured deployment branch
+4. **Deployment Start**: Set deployment status to "in progress"
+5. **Code Update**: Pull latest changes from repository
+6. **Dependencies**: Install/update npm dependencies
+7. **Build Process**: Run build commands if configured
+8. **Service Restart**: Restart application with new code
+9. **Health Check**: Verify deployment success
+10. **Status Update**: Update deployment status to "completed"
+
+#### Manual Deployment
+
+Use the manual deployment endpoint for:
+- **Hotfixes**: Quick fixes that need immediate deployment
+- **Rollbacks**: Reverting to previous versions
+- **Testing**: Deploying specific branches for testing
+
+### Security Features
+
+#### Webhook Security
+
+- **Signature Verification**: All GitHub webhooks are verified using HMAC-SHA256
+- **IP Whitelisting**: Optional restriction to GitHub's IP ranges
+- **Rate Limiting**: Protection against webhook spam
+- **Event Filtering**: Only process configured event types
+
+#### Deployment Security
+
+- **Authentication**: Webhook endpoints can require authentication
+- **Branch Protection**: Only deploy from specified branches
+- **Backup Creation**: Automatic backup before deployment
+- **Rollback Capability**: Quick rollback on deployment failure
+
+### Monitoring & Logging
+
+#### Deployment Logs
+
+All deployment activities are logged with:
+- **Timestamp**: When deployment started/completed
+- **Duration**: How long deployment took
+- **Status**: Success/failure status
+- **Error Details**: Detailed error information if failed
+- **Commit Info**: Git commit hash and message
+
+#### Status Monitoring
+
+- **Real-time Status**: Check deployment progress via `/webhook/status`
+- **Health Checks**: Automatic health verification post-deployment
+- **Notification**: Optional notifications on deployment completion
+- **Metrics**: Track deployment frequency and success rates
+
+### Troubleshooting
+
+#### Common Issues
+
+1. **Webhook Not Received:**
+   - Check GitHub webhook delivery logs
+   - Verify webhook URL is accessible
+   - Confirm webhook secret configuration
+
+2. **Deployment Fails:**
+   - Check server logs for error details
+   - Verify build commands and dependencies
+   - Ensure sufficient disk space and permissions
+
+3. **Service Won't Start:**
+   - Check for port conflicts
+   - Verify environment variables
+   - Review application logs for startup errors
+
+#### Debug Commands
+
+```bash
+# Check webhook status
+curl -X GET https://your-domain.com/webhook/status
+
+# Manual deployment
+curl -X POST https://your-domain.com/webhook/deploy \
+  -H "Content-Type: application/json" \
+  -d '{"branch": "main", "reason": "Manual deployment test"}'
+
+# Check server logs
+tail -f logs/deployment.log
+```
 
 ## 📅 Schedule Management
 
@@ -1763,6 +2032,10 @@ For support and questions:
 - [x] **Background job queue system with status tracking**
 - [x] **Real-time job progress monitoring**
 - [x] **HTTP timeout prevention for attendance fetch operations**
+- [x] **GitHub webhook integration for automated deployment**
+- [x] **Manual deployment trigger endpoints**
+- [x] **Real-time deployment status monitoring**
+- [x] **Webhook security with signature verification**
 
 ### Version 2.2 (Future)
 - [ ] GraphQL API support
