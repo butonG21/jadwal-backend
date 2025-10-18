@@ -7,7 +7,7 @@ import { ApiResponse } from '../utils/apiResponse';
 const execAsync = promisify(exec);
 
 export class WebhookController {
-  private projectPath = '/shiftly/jadwal-backend';
+  private projectPath = process.env.PROJECT_PATH || `${process.env.HOME || process.env.USERPROFILE}/shiftly/jadwal-backend`;
   private isDeploying = false;
 
   async handleGitHubWebhook(req: Request, res: Response): Promise<void> {
@@ -116,9 +116,11 @@ export class WebhookController {
       const deployScript = `${this.projectPath}/scripts/deploy.sh`;
       
       logger.info(`Executing deployment script: ${deployScript}`);
+      logger.info(`Project path: ${this.projectPath}`);
 
       const { stdout, stderr } = await execAsync(`bash ${deployScript}`, {
         timeout: 600000, // 10 minutes timeout
+        cwd: this.projectPath, // Set working directory to project root
         env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' }
       });
       
