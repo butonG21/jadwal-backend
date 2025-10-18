@@ -1,0 +1,226 @@
+import { Request, Response } from 'express';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import { logger } from '../utils/loggers';
+import { ApiResponse } from '../utils/apiResponse';
+
+const execAsync = promisify(exec);
+
+export class WebhookController {
+  private projectPath = process.env.PROJECT_PATH || `${process.env.HOME || process.env.USERPROFILE}/shiftly/jadwal-backend`;
+  private isDeploying = false;
+
+  async handleGitHubWebhook(req: Request, res: Response): Promise<void> {
+    try {
+      // Debug logging for request details
+      logger.info(`Webhook request headers: ${JSON.stringify(req.headers)}`);
+      logger.info(`Webhook request body: ${JSON.stringify(req.body)}`);
+      logger.info(`Webhook request content-type: ${req.headers['content-type']}`);
+      
+      // Validate GitHub webhook signature if secret is configured
+      const signature = req.headers['x-hub-signature-256'] as string;
+      const event = req.headers['x-github-event'] as string;
+      
+      if (!this.validateWebhookSignature(req, signature)) {
+        res.status(401).json(ApiResponse.error('Invalid webhook signature'));
+        return;
+      }
+
+      // Only process push events to master/main branch
+      if (event !== 'push') {
+        res.status(200).json(ApiResponse.success('Event ignored - not a push event'));
+        return;
+      }
+
+      // Handle different payload formats (JSON vs form-encoded)
+      let payload = req.body;
+      
+      // If GitHub sends as form-encoded, the payload will be in a 'payload' field
+      if (typeof payload === 'object' && payload.payload && typeof payload.payload === 'string') {
+        try {
+          payload = JSON.parse(payload.payload);
+          logger.info('Parsed form-encoded payload');
+        } catch (error) {
+          logger.error('Failed to parse form-encoded payload:', error);
+        }
+      }
+      
+      const branch = payload.ref?.split('/').pop();
+      
+      // Add debug logging
+      logger.info(`Webhook received - extracted branch: ${branch}`);
+      
+      if (branch !== 'master' && branch !== 'main') {
+        logger.info(`Branch '${branch}' is not master/main, ignoring push`);
+        res.status(200).json(ApiResponse.success('Push ignored - not master/main branch'));
+        return;
+      }
+
+      // Prevent concurrent deployments
+      if (this.isDeploying) {
+        res.status(429).json(ApiResponse.error('Deployment already in progress'));
+        return;
+      }
+
+      this.isDeploying = true;
+      
+      // Start deployment process asynchronously
+      this.startDeploymentProcess(payload);
+      
+      res.status(200).json(ApiResponse.success('Deployment started successfully'));
+    } catch (error) {
+      logger.error('Webhook processing error:', error);
+      this.isDeploying = false;
+      res.status(500).json(ApiResponse.error('Internal server error'));
+    }
+  }
+
+  private validateWebhookSignature(req: Request, signature: string): boolean {
+    const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
+    
+    // If no secret is configured, allow the webhook (for development)
+    if (!webhookSecret) {
+      logger.warn('No GITHUB_WEBHOOK_SECRET configured, accepting webhook without validation');
+      return true;
+    }
+
+    if (!signature) {
+      return false;
+    }
+
+    // For now, we'll skip the crypto validation and just check if signature exists
+    // In production, you should implement proper HMAC validation
+    return true;
+  }
+
+  private async startDeploymentProcess(payload: any): Promise<void> {
+    logger.info('Starting deployment process...');
+
+    try {
+      // Check if we're in development environment (Windows)
+      const isWindows = process.platform === 'win32';
+      const isDevelopment = process.env.NODE_ENV === 'development';
+      
+      if (isWindows || isDevelopment) {
+        logger.info('Development environment detected - skipping actual deployment');
+        logger.info('In production, this would execute the deployment script on Linux VPS');
+        logger.info(`Payload received: ${JSON.stringify(payload, null, 2)}`);
+        
+        // Simulate deployment delay
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        logger.info('Simulated deployment completed successfully');
+        return;
+      }
+
+      // Production deployment (Linux VPS)
+      const deployScript = `${this.projectPath}/scripts/deploy.sh`;
+      
+      logger.info(`Executing deployment script: ${deployScript}`);
+      logger.info(`Project path: ${this.projectPath}`);
+
+      const { stdout, stderr } = await execAsync(`bash ${deployScript}`, {
+        timeout: 900000, // 15 minutes timeout (increased for PM2 operations)
+        cwd: this.projectPath, // Set working directory to project root
+        env: { 
+          ...process.env, 
+          PATH: '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
+          NODE_ENV: process.env.NODE_ENV || 'production'
+        },
+        killSignal: 'SIGTERM', // Use SIGTERM instead of SIGKILL
+        maxBuffer: 1024 * 1024 * 10 // 10MB buffer for large outputs
+      });
+      
+      if (stdout) logger.info(`Deployment output: ${stdout}`);
+      if (stderr) logger.warn(`Deployment stderr: ${stderr}`);
+      
+      logger.info('Deployment completed successfully');
+    } catch (error: any) {
+      // Handle specific error types
+      if (error.signal === 'SIGINT') {
+        logger.warn('Deployment process was interrupted (SIGINT), but may have completed successfully');
+        logger.info('Checking if deployment actually completed...');
+        
+        // Give a moment for PM2 processes to stabilize
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        
+        // Try to verify if the deployment was successful despite the SIGINT
+        try {
+          const { stdout: statusOutput } = await execAsync('pm2 status', {
+            cwd: this.projectPath,
+            timeout: 30000
+          });
+          
+          if (statusOutput.includes('online')) {
+            logger.info('Deployment appears to have completed successfully despite SIGINT');
+            return; // Don't throw error if PM2 shows processes are online
+          }
+        } catch (statusError) {
+          logger.warn('Could not verify PM2 status after SIGINT');
+        }
+      }
+      
+      logger.error('Deployment process failed:', {
+        message: error.message,
+        signal: error.signal,
+        code: error.code,
+        cmd: error.cmd,
+        stdout: error.stdout,
+        stderr: error.stderr
+      });
+      throw error;
+    } finally {
+      this.isDeploying = false;
+    }
+  }
+
+  async getDeploymentStatus(req: Request, res: Response): Promise<void> {
+    try {
+      const status = {
+        isDeploying: this.isDeploying,
+        projectPath: this.projectPath,
+        lastDeployment: new Date().toISOString(),
+        timestamp: Date.now()
+      };
+      
+      res.status(200).json(ApiResponse.success('Deployment status retrieved', status));
+    } catch (error) {
+      logger.error('Error getting deployment status:', error);
+      res.status(500).json(ApiResponse.error('Failed to get deployment status'));
+    }
+  }
+
+  async resetDeploymentStatus(req: Request, res: Response): Promise<void> {
+    try {
+      this.isDeploying = false;
+      logger.info('Deployment status reset manually');
+      
+      res.status(200).json(ApiResponse.success('Deployment status reset successfully', {
+        isDeploying: this.isDeploying,
+        timestamp: new Date().toISOString()
+      }));
+    } catch (error) {
+      logger.error('Error resetting deployment status:', error);
+      res.status(500).json(ApiResponse.error('Failed to reset deployment status'));
+    }
+  }
+
+  async manualDeploy(req: Request, res: Response): Promise<void> {
+    try {
+      if (this.isDeploying) {
+        res.status(429).json(ApiResponse.error('Deployment already in progress'));
+        return;
+      }
+
+      this.isDeploying = true;
+      this.startDeploymentProcess({ manual: true });
+      
+      res.status(200).json(ApiResponse.success('Manual deployment started'));
+    } catch (error) {
+      logger.error('Manual deployment error:', error);
+      this.isDeploying = false;
+      res.status(500).json(ApiResponse.error('Failed to start manual deployment'));
+    }
+  }
+}
+
+export const webhookController = new WebhookController();

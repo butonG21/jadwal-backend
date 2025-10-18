@@ -16,6 +16,7 @@ import authRoutes from './routes/authRoutes';
 import attendanceRoutes from './routes/attendance';
 import cronRoutes from './routes/cronRoutes';
 import latenessRoutes from './routes/lateness';
+import webhookRoutes from './routes/webhookRoutes';
 
 // Services
 import { cronService } from './services/cronService';
@@ -46,6 +47,16 @@ class Application {
   }
 
   private initializeMiddleware(): void {
+    // Trust proxy for correct IP addresses
+    this.app.set('trust proxy', true);
+
+
+    this.app.use((req, res, next) => {
+      console.log('Client IP:', req.ip);
+      console.log('Forwarded IPs:', req.headers['x-forwarded-for']);
+      next();
+    });
+    
     // Security middleware
     this.app.use(helmet({
       crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -100,8 +111,6 @@ class Application {
     }));
     this.app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-    // Trust proxy for correct IP addresses
-    this.app.set('trust proxy', 1);
 
     // Custom middleware for request context
     this.app.use((req, res, next) => {
@@ -150,6 +159,9 @@ class Application {
     this.app.use('/api/auth', authRoutes);
     this.app.use('/api/attendance', attendanceRoutes);
     this.app.use('/api/lateness', latenessRoutes);
+
+    // Webhook routes - these should be added before other routes
+    this.app.use('/webhook', webhookRoutes);
 
     // Root endpoint with API documentation
     this.app.get('/', this.rootEndpoint.bind(this));
