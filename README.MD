@@ -38,6 +38,32 @@ A robust, scalable Node.js/Express backend API for employee scheduling and atten
 - **Secure Upload**: Rate-limited uploads with file type and size validation
 - **Metadata Management**: Support for alt text and captions
 
+### Lateness Calculation Features
+- **Comprehensive Lateness Detection**: Calculates start lateness, break lateness, and total lateness minutes
+- **Advanced Attendance Status Detection**: Supports multiple attendance statuses:
+  - `on_time`: Employee arrived on time
+  - `late`: Employee arrived 1-15 minutes late
+  - `very_late`: Employee arrived more than 15 minutes late
+  - `absent`: No attendance data or all times are 00:00:00
+  - `off_day`: Scheduled day off (OFF/CT)
+  - `early_departure`: Employee left before scheduled end time
+  - `incomplete_attendance`: Partial attendance data (only check-in or check-out)
+- **Intelligent Data Validation**: Automatically detects and handles:
+  - Missing attendance data
+  - Invalid time entries (00:00:00 treated as no data)
+  - Incomplete check-in/check-out records
+  - Schedule validation and holiday detection
+- **Statistical Reporting**: Provides detailed statistics including:
+  - Average start lateness (in readable format)
+  - Total late minutes (in readable format)
+  - Attendance rate and punctuality rate
+  - Breakdown of on-time, late, very late, and absent days
+- **Period-based Analysis**: Supports daily, weekly, and monthly statistics
+- **Employee-specific Reporting**: Includes employee name and period in all reports
+- **Accurate Working Minutes Calculation**: Calculates actual working minutes based on shift schedule
+- **Break Time Analysis**: Tracks break lateness and calculates break duration
+- **Robust Error Handling**: Comprehensive error handling for edge cases and data inconsistencies
+
 ## 📋 Prerequisites
 
 Before running this application, make sure you have the following installed:
@@ -211,6 +237,1158 @@ All protected endpoints require a Bearer token in the Authorization header:
 ```bash
 Authorization: Bearer <your-jwt-token>
 ```
+
+## ⏰ Lateness Calculation Endpoints
+
+### Calculate Lateness for a Specific Date
+```http
+POST /api/lateness/calculate/date/:employeeId
+Authorization: Bearer <token>
+```
+
+**Description**: Menghitung keterlambatan untuk satu karyawan pada tanggal tertentu. Endpoint ini akan memproses data kehadiran karyawan untuk tanggal yang diberikan dan menentukan apakah ada keterlambatan masuk kerja atau keterlambatan setelah istirahat.
+
+**Parameters**:
+- `employeeId` (path): ID unik karyawan yang akan dihitung keterlambatannya
+- `date` (query, optional): Tanggal dalam format YYYY-MM-DD. Jika tidak disediakan, akan menggunakan tanggal hari ini
+
+**Example Request**:
+```http
+POST /api/lateness/calculate/date/EMP001?date=2024-01-15
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Success Response**:
+```json
+{
+  "success": true,
+  "message": "Lateness calculated successfully",
+  "data": {
+    "employee_id": "EMP001",
+    "employee_name": "John Doe",
+    "date": "2024-01-15",
+    "shift_start": "08:00:00",
+    "shift_end": "17:00:00",
+    "break_start": "12:00:00",
+    "break_end": "13:00:00",
+    "actual_start_time": "08:15:00",
+    "actual_end_time": "17:05:00",
+    "actual_break_out": "12:05:00",
+    "actual_break_in": "13:10:00",
+    "start_lateness_minutes": 15,
+    "end_lateness_minutes": 0,
+    "break_lateness_minutes": 10,
+    "total_working_minutes": 475,
+    "scheduled_working_minutes": 480,
+    "attendance_status": "late",
+    "break_status": "late",
+    "is_complete_attendance": true,
+    "notes": "Employee arrived 15 minutes late"
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z"
+}
+```
+
+**Error Response**:
+```json
+{
+  "success": false,
+  "message": "Employee not found or no schedule available",
+  "error": {
+    "code": "EMPLOYEE_NOT_FOUND",
+    "details": "No employee found with ID: EMP001"
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z"
+}
+```
+
+### Calculate Lateness for a Date Range
+```http
+POST /api/lateness/calculate/range/:employeeId
+Authorization: Bearer <token>
+```
+
+**Description**: Menghitung keterlambatan untuk satu karyawan dalam rentang tanggal yang ditentukan. Endpoint ini akan mengulang perhitungan keterlambatan harian untuk setiap tanggal dalam rentang yang diberikan.
+
+**Parameters**:
+- `employeeId` (path): ID unik karyawan
+- `startDate` (query): Tanggal mulai rentang dalam format YYYY-MM-DD
+- `endDate` (query): Tanggal akhir rentang dalam format YYYY-MM-DD
+- `saveToDb` (query, optional): Nilai boolean (`true`/`false`) untuk menyimpan hasil perhitungan ke database. Default: `false`
+
+**Example Request**:
+```http
+POST /api/lateness/calculate/range/EMP001?startDate=2024-01-01&endDate=2024-01-31&saveToDb=true
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Success Response**:
+```json
+{
+  "success": true,
+  "message": "Lateness calculated for date range successfully",
+  "data": {
+    "employee_id": "EMP001",
+    "employee_name": "John Doe",
+    "period": {
+      "start_date": "2024-01-01",
+      "end_date": "2024-01-31",
+      "total_days": 31,
+      "working_days": 22,
+      "off_days": 9
+    },
+    "summary": {
+      "total_late_minutes": 180,
+      "average_start_lateness": "8 minutes 10 seconds",
+      "attendance_rate": 95.45,
+      "punctuality_rate": 72.73,
+      "status_breakdown": {
+        "on_time": 16,
+        "late": 4,
+        "very_late": 1,
+        "absent": 1,
+        "incomplete_attendance": 0,
+        "off_day": 9
+      }
+    },
+    "daily_records": [
+      {
+        "date": "2024-01-01",
+        "attendance_status": "off_day",
+        "shift_type": "OFF"
+      },
+      {
+        "date": "2024-01-02",
+        "attendance_status": "on_time",
+        "start_lateness_minutes": 0,
+        "break_lateness_minutes": 0,
+        "total_working_minutes": 480,
+        "is_complete_attendance": true
+      },
+      {
+        "date": "2024-01-03",
+        "attendance_status": "late",
+        "start_lateness_minutes": 12,
+        "break_lateness_minutes": 5,
+        "total_working_minutes": 468,
+        "is_complete_attendance": true
+      }
+    ],
+    "saved_to_database": true
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z"
+}
+```
+
+### Calculate Lateness for a Month
+```http
+POST /api/lateness/calculate/month/:employeeId
+Authorization: Bearer <token>
+```
+
+**Description**: Menghitung keterlambatan untuk satu karyawan selama satu bulan penuh. Endpoint ini akan mengagregasi data keterlambatan harian untuk menghasilkan statistik bulanan.
+
+**Parameters**:
+- `employeeId` (path): ID unik karyawan
+- `month` (query): Bulan (angka 1-12)
+- `year` (query): Tahun (misalnya, 2024)
+- `saveToDb` (query, optional): Nilai boolean (`true`/`false`) untuk menyimpan hasil perhitungan ke database. Default: `false`
+
+**Example Request**:
+```http
+POST /api/lateness/calculate/month/EMP001?month=1&year=2024&saveToDb=true
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Success Response**:
+```json
+{
+  "success": true,
+  "message": "Monthly lateness calculated successfully",
+  "data": {
+    "employee_id": "EMP001",
+    "employee_name": "John Doe",
+    "period": {
+      "month": 1,
+      "year": 2024,
+      "month_name": "January",
+      "total_days": 31,
+      "working_days": 22,
+      "off_days": 9
+    },
+    "monthly_summary": {
+      "total_late_minutes": "3 hours 15 minutes",
+      "average_start_lateness": "8 minutes 52 seconds",
+      "average_working_hours": "7 hours 58 minutes",
+      "attendance_rate": 95.45,
+      "punctuality_rate": 68.18,
+      "complete_attendance_rate": 100.0
+    },
+    "detailed_breakdown": {
+      "status_counts": {
+        "on_time": 15,
+        "late": 5,
+        "very_late": 1,
+        "absent": 1,
+        "incomplete_attendance": 0,
+        "off_day": 9,
+        "early_departure": 0
+      },
+      "lateness_distribution": {
+        "0_minutes": 15,
+        "1_to_5_minutes": 2,
+        "6_to_15_minutes": 3,
+        "16_to_30_minutes": 1,
+        "over_30_minutes": 0
+      },
+      "break_analysis": {
+        "total_break_lateness_minutes": 45,
+        "average_break_lateness": "2 minutes 3 seconds",
+        "days_with_break_lateness": 8
+      }
+    },
+    "weekly_trends": [
+      {
+        "week": 1,
+        "dates": "2024-01-01 to 2024-01-07",
+        "punctuality_rate": 80.0,
+        "average_lateness": "5 minutes"
+      },
+      {
+        "week": 2,
+        "dates": "2024-01-08 to 2024-01-14",
+        "punctuality_rate": 60.0,
+        "average_lateness": "12 minutes"
+      }
+    ],
+    "saved_to_database": true
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z"
+}
+```
+
+### Get Lateness Data
+```http
+GET /api/lateness/data/:employeeId
+Authorization: Bearer <token>
+```
+
+**Description**: Mengambil data keterlambatan yang sudah tersimpan di database untuk karyawan tertentu. Data dapat difilter berdasarkan tanggal spesifik atau rentang tanggal.
+
+**Parameters**:
+- `employeeId` (path): ID unik karyawan
+- `date` (query, optional): Tanggal spesifik dalam format YYYY-MM-DD untuk mengambil data satu hari
+- `startDate` (query, optional): Tanggal mulai rentang dalam format YYYY-MM-DD
+- `endDate` (query, optional): Tanggal akhir rentang dalam format YYYY-MM-DD
+- `limit` (query, optional): Jumlah maksimal record yang dikembalikan (default: 100)
+- `page` (query, optional): Halaman untuk pagination (default: 1)
+
+**Example Request**:
+```http
+GET /api/lateness/data/EMP001?startDate=2024-01-01&endDate=2024-01-31&limit=50&page=1
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Success Response**:
+```json
+{
+  "success": true,
+  "message": "Lateness data retrieved successfully",
+  "data": {
+    "employee_id": "EMP001",
+    "employee_name": "John Doe",
+    "total_records": 22,
+    "current_page": 1,
+    "total_pages": 1,
+    "records": [
+      {
+        "_id": "65a1b2c3d4e5f6789012345",
+        "employee_id": "EMP001",
+        "date": "2024-01-15",
+        "shift_start": "08:00:00",
+        "shift_end": "17:00:00",
+        "break_start": "12:00:00",
+        "break_end": "13:00:00",
+        "actual_start_time": "08:15:00",
+        "actual_end_time": "17:05:00",
+        "actual_break_out": "12:05:00",
+        "actual_break_in": "13:10:00",
+        "start_lateness_minutes": 15,
+        "end_lateness_minutes": 0,
+        "break_lateness_minutes": 10,
+        "total_working_minutes": 475,
+        "scheduled_working_minutes": 480,
+        "attendance_status": "late",
+        "break_status": "late",
+        "is_complete_attendance": true,
+        "created_at": "2024-01-15T10:30:00.000Z",
+        "updated_at": "2024-01-15T10:30:00.000Z"
+      },
+      {
+        "_id": "65a1b2c3d4e5f6789012346",
+        "employee_id": "EMP001",
+        "date": "2024-01-16",
+        "attendance_status": "on_time",
+        "start_lateness_minutes": 0,
+        "break_lateness_minutes": 0,
+        "total_working_minutes": 480,
+        "is_complete_attendance": true
+      }
+    ]
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z"
+}
+```
+
+### Get Lateness Statistics
+```http
+GET /api/lateness/stats/:employeeId?
+Authorization: Bearer <token>
+```
+
+**Description**: Mengambil statistik keterlambatan untuk karyawan tertentu atau untuk semua karyawan dalam rentang tanggal yang diberikan. Statistik mencakup rata-rata keterlambatan, total menit keterlambatan, tingkat kehadiran, dan rincian status kehadiran.
+
+**Parameters**:
+- `employeeId` (path, optional): ID unik karyawan. Jika tidak disediakan, akan mengembalikan statistik untuk semua karyawan
+- `startDate` (query, optional): Tanggal mulai rentang dalam format YYYY-MM-DD
+- `endDate` (query, optional): Tanggal akhir rentang dalam format YYYY-MM-DD
+- `groupBy` (query, optional): Pengelompokan statistik (`daily`, `weekly`, `monthly`). Default: `overall`
+
+**Example Request (Single Employee)**:
+```http
+GET /api/lateness/stats/EMP001?startDate=2024-01-01&endDate=2024-01-31&groupBy=weekly
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Success Response (Single Employee)**:
+```json
+{
+  "success": true,
+  "message": "Lateness statistics retrieved successfully",
+  "data": {
+    "employee_id": "EMP001",
+    "employee_name": "John Doe",
+    "period": {
+      "start_date": "2024-01-01",
+      "end_date": "2024-01-31",
+      "total_days": 31,
+      "working_days": 22
+    },
+    "overall_statistics": {
+      "total_late_minutes": 195,
+      "total_late_minutes_formatted": "3 hours 15 minutes",
+      "average_start_lateness": "8 minutes 52 seconds",
+      "average_working_hours": "7 hours 58 minutes",
+      "attendance_rate": 95.45,
+      "punctuality_rate": 68.18,
+      "complete_attendance_rate": 100.0
+    },
+    "status_breakdown": {
+      "on_time": { "count": 15, "percentage": 68.18 },
+      "late": { "count": 5, "percentage": 22.73 },
+      "very_late": { "count": 1, "percentage": 4.55 },
+      "absent": { "count": 1, "percentage": 4.55 },
+      "incomplete_attendance": { "count": 0, "percentage": 0 },
+      "off_day": { "count": 9, "percentage": 29.03 }
+    },
+    "weekly_trends": [
+      {
+        "week": 1,
+        "period": "2024-01-01 to 2024-01-07",
+        "working_days": 5,
+        "punctuality_rate": 80.0,
+        "average_lateness": "5 minutes",
+        "total_late_minutes": 25
+      },
+      {
+        "week": 2,
+        "period": "2024-01-08 to 2024-01-14",
+        "working_days": 6,
+        "punctuality_rate": 66.67,
+        "average_lateness": "8 minutes",
+        "total_late_minutes": 48
+      }
+    ]
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z"
+}
+```
+
+**Example Request (All Employees)**:
+```http
+GET /api/lateness/stats?startDate=2024-01-01&endDate=2024-01-31
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Success Response (All Employees)**:
+```json
+{
+  "success": true,
+  "message": "Company-wide lateness statistics retrieved successfully",
+  "data": {
+    "period": {
+      "start_date": "2024-01-01",
+      "end_date": "2024-01-31",
+      "total_employees": 25
+    },
+    "company_overview": {
+      "overall_punctuality_rate": 78.5,
+      "overall_attendance_rate": 92.3,
+      "total_late_incidents": 156,
+      "average_company_lateness": "6 minutes 30 seconds"
+    },
+    "employee_rankings": {
+      "most_punctual": [
+        { "employee_id": "EMP005", "name": "Alice Johnson", "punctuality_rate": 100.0 },
+        { "employee_id": "EMP012", "name": "Bob Smith", "punctuality_rate": 95.5 }
+      ],
+      "needs_improvement": [
+        { "employee_id": "EMP018", "name": "Charlie Brown", "punctuality_rate": 45.5 },
+        { "employee_id": "EMP003", "name": "David Wilson", "punctuality_rate": 52.3 }
+      ]
+    },
+    "department_breakdown": [
+      {
+        "department": "IT",
+        "punctuality_rate": 85.2,
+        "employee_count": 8
+      },
+      {
+        "department": "HR",
+        "punctuality_rate": 72.1,
+        "employee_count": 5
+      }
+    ]
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z"
+}
+```
+
+### Get Late Employees
+```http
+GET /api/lateness/late-employees
+Authorization: Bearer <token>
+```
+
+**Description**: Mengambil daftar karyawan yang terdeteksi terlambat pada tanggal tertentu. Endpoint ini berguna untuk melihat ringkasan cepat siapa saja yang terlambat pada hari itu.
+
+**Parameters**:
+- `date` (query, optional): Tanggal dalam format YYYY-MM-DD. Jika tidak disediakan, akan menggunakan tanggal hari ini
+- `severity` (query, optional): Filter berdasarkan tingkat keterlambatan (`late`, `very_late`, `all`). Default: `all`
+- `department` (query, optional): Filter berdasarkan departemen
+- `limit` (query, optional): Jumlah maksimal record yang dikembalikan (default: 50)
+
+**Example Request**:
+```http
+GET /api/lateness/late-employees?date=2024-01-15&severity=very_late&department=IT
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Success Response**:
+```json
+{
+  "success": true,
+  "message": "Late employees retrieved successfully",
+  "data": {
+    "date": "2024-01-15",
+    "total_late_employees": 8,
+    "summary": {
+      "late_count": 5,
+      "very_late_count": 3,
+      "total_late_minutes": 145,
+      "average_lateness": "18 minutes 7 seconds"
+    },
+    "employees": [
+      {
+        "employee_id": "EMP001",
+        "employee_name": "John Doe",
+        "department": "IT",
+        "position": "Software Developer",
+        "scheduled_start": "08:00:00",
+        "actual_start": "08:25:00",
+        "lateness_minutes": 25,
+        "lateness_formatted": "25 minutes",
+        "attendance_status": "very_late",
+        "break_lateness_minutes": 5,
+        "is_repeat_offender": false,
+        "late_days_this_month": 3
+      },
+      {
+        "employee_id": "EMP007",
+        "employee_name": "Sarah Wilson",
+        "department": "HR",
+        "position": "HR Specialist",
+        "scheduled_start": "09:00:00",
+        "actual_start": "09:12:00",
+        "lateness_minutes": 12,
+        "lateness_formatted": "12 minutes",
+        "attendance_status": "late",
+        "break_lateness_minutes": 0,
+        "is_repeat_offender": true,
+        "late_days_this_month": 8
+      }
+    ],
+    "department_breakdown": [
+      {
+        "department": "IT",
+        "late_count": 3,
+        "total_employees": 8,
+        "late_percentage": 37.5
+      },
+      {
+        "department": "HR",
+        "late_count": 2,
+        "total_employees": 5,
+        "late_percentage": 40.0
+      }
+    ]
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z"
+}
+```
+
+### Bulk Lateness Calculation (Admin Only)
+```http
+POST /api/lateness/calculate/bulk
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+```
+
+**Description**: Menghitung keterlambatan untuk beberapa karyawan sekaligus. Endpoint ini dirancang untuk penggunaan administratif dan membutuhkan peran `admin`.
+
+**Request Body**:
+```json
+{
+  "employeeIds": ["string"],  // Array ID karyawan yang akan diproses
+  "date"?: "string",         // Tanggal spesifik (YYYY-MM-DD) jika perhitungan harian
+  "startDate"?: "string",    // Tanggal mulai (YYYY-MM-DD) jika perhitungan rentang
+  "endDate"?: "string",      // Tanggal akhir (YYYY-MM-DD) jika perhitungan rentang
+  "saveToDb"?: "boolean",    // Menyimpan hasil ke database (default: false)
+  "priority"?: "string"      // Prioritas job ("high", "normal", "low"). Default: "normal"
+}
+```
+
+**Example Request**:
+```http
+POST /api/lateness/calculate/bulk
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+Content-Type: application/json
+
+{
+  "employeeIds": ["EMP001", "EMP002", "EMP003"],
+  "startDate": "2024-01-01",
+  "endDate": "2024-01-31",
+  "saveToDb": true,
+  "priority": "high"
+}
+```
+
+**Success Response**:
+```json
+{
+  "success": true,
+  "message": "Bulk lateness calculation initiated successfully",
+  "data": {
+    "job_id": "bulk_calc_20240115_103000_abc123",
+    "total_employees": 3,
+    "estimated_duration": "5-10 minutes",
+    "status": "processing",
+    "progress": {
+      "completed": 0,
+      "total": 3,
+      "percentage": 0
+    },
+    "results": {
+      "successful": [],
+      "failed": [],
+      "processing": ["EMP001", "EMP002", "EMP003"]
+    },
+    "settings": {
+      "period": {
+        "start_date": "2024-01-01",
+        "end_date": "2024-01-31"
+      },
+      "save_to_database": true,
+      "priority": "high"
+    },
+    "started_at": "2025-01-15T10:30:00.000Z"
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z"
+}
+```
+
+**Job Completion Response** (when checking job status):
+```json
+{
+  "success": true,
+  "message": "Bulk calculation completed",
+  "data": {
+    "job_id": "bulk_calc_20240115_103000_abc123",
+    "status": "completed",
+    "progress": {
+      "completed": 3,
+      "total": 3,
+      "percentage": 100
+    },
+    "results": {
+      "successful": [
+        {
+          "employee_id": "EMP001",
+          "records_processed": 22,
+          "total_late_minutes": 180,
+          "processing_time": "2.3 seconds"
+        },
+        {
+          "employee_id": "EMP002",
+          "records_processed": 20,
+          "total_late_minutes": 95,
+          "processing_time": "1.8 seconds"
+        }
+      ],
+      "failed": [
+        {
+          "employee_id": "EMP003",
+          "error": "No schedule found for employee",
+          "error_code": "SCHEDULE_NOT_FOUND"
+        }
+      ]
+    },
+    "summary": {
+      "total_records_processed": 42,
+      "total_late_minutes": 275,
+      "success_rate": 66.67,
+      "total_processing_time": "4.1 seconds"
+    },
+    "completed_at": "2025-01-15T10:35:00.000Z"
+  }
+}
+```
+
+### Lateness Service Health Check
+```http
+GET /api/lateness/health
+Authorization: Bearer <token>
+```
+
+**Description**: Melakukan pemeriksaan kesehatan pada layanan perhitungan keterlambatan untuk memastikan semua komponen (misalnya, koneksi database) berfungsi dengan baik.
+
+**Example Request**:
+```http
+GET /api/lateness/health
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Success Response**:
+```json
+{
+  "success": true,
+  "message": "Lateness service is healthy",
+  "data": {
+    "service_status": "operational",
+    "database_connection": "connected",
+    "last_calculation": "2025-01-15T09:45:00.000Z",
+    "total_records_processed_today": 156,
+    "average_processing_time": "1.2 seconds",
+    "cache_status": "active",
+    "memory_usage": {
+      "used": "45.2 MB",
+      "available": "82.8 MB"
+    },
+    "performance_metrics": {
+      "calculations_per_minute": 25,
+      "error_rate": 0.02,
+      "uptime": "99.98%"
+    }
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z"
+}
+```
+
+**Error Response**:
+```json
+{
+  "success": false,
+  "message": "Lateness service health check failed",
+  "error": {
+    "code": "DATABASE_CONNECTION_FAILED",
+    "details": "Unable to connect to MongoDB",
+    "affected_services": ["calculation", "statistics"]
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z"
+}
+```
+
+## 🧮 Lateness Calculation Logic
+
+### Algoritma Perhitungan Keterlambatan
+
+Sistem lateness calculation menggunakan algoritma yang komprehensif untuk menentukan status kehadiran dan menghitung keterlambatan dengan akurat:
+
+#### 1. **Data Validation & Preprocessing**
+```typescript
+// Fungsi untuk mendeteksi waktu yang tidak valid
+function isZeroTime(timeString: string): boolean {
+  return timeString === '00:00:00' || !timeString;
+}
+
+// Validasi data kehadiran
+const hasValidStartTime = attendance.start_time && !isZeroTime(attendance.start_time);
+const hasValidEndTime = attendance.end_time && !isZeroTime(attendance.end_time);
+```
+
+#### 2. **Status Kehadiran Logic**
+
+| Kondisi | Status | Deskripsi |
+|---------|--------|-----------|
+| `!hasValidStartTime && !hasValidEndTime` | `absent` | Tidak ada data kehadiran valid |
+| `hasValidStartTime && !hasValidEndTime` | `incomplete_attendance` | Hanya check-in |
+| `!hasValidStartTime && hasValidEndTime` | `incomplete_attendance` | Hanya check-out |
+| `hasValidStartTime && hasValidEndTime` | Dihitung berdasarkan keterlambatan | Data lengkap |
+
+#### 3. **Perhitungan Keterlambatan**
+
+**Start Lateness:**
+```typescript
+if (hasValidStartTime) {
+  const timeDiff = calculateTimeDifference(schedule.shift_start, attendance.start_time);
+  start_lateness_minutes = timeDiff > 0 ? timeDiff : 0;
+}
+```
+
+**Break Lateness:**
+```typescript
+if (attendance.break_out_time && !isZeroTime(attendance.break_out_time)) {
+  const breakLateness = calculateTimeDifference(schedule.break_start, attendance.break_out_time);
+  break_lateness_minutes = breakLateness > 0 ? breakLateness : 0;
+}
+```
+
+**End Lateness (Early Departure):**
+```typescript
+if (hasValidEndTime) {
+  const endDiff = calculateTimeDifference(attendance.end_time, schedule.shift_end);
+  end_lateness_minutes = endDiff > 0 ? endDiff : 0;
+}
+```
+
+#### 4. **Working Minutes Calculation**
+```typescript
+if (hasValidStartTime && hasValidEndTime) {
+  let workingMinutes = calculateTimeDifference(attendance.start_time, attendance.end_time);
+  
+  // Kurangi durasi istirahat jika ada
+  if (attendance.break_out_time && !isZeroTime(attendance.break_out_time) &&
+      attendance.break_in_time && !isZeroTime(attendance.break_in_time)) {
+    const breakDuration = calculateTimeDifference(attendance.break_out_time, attendance.break_in_time);
+    workingMinutes -= breakDuration;
+  }
+  
+  total_working_minutes = workingMinutes;
+}
+```
+
+#### 5. **Attendance Status Classification**
+
+```typescript
+if (hasValidStartTime && hasValidEndTime) {
+  if (start_lateness_minutes === 0) {
+    attendance_status = 'on_time';
+  } else if (start_lateness_minutes <= 15) {
+    attendance_status = 'late';
+  } else {
+    attendance_status = 'very_late';
+  }
+  
+  // Check for early departure
+  if (end_lateness_minutes > 0) {
+    attendance_status = 'early_departure';
+  }
+} else if (hasValidStartTime || hasValidEndTime) {
+  attendance_status = 'incomplete_attendance';
+} else {
+  attendance_status = 'absent';
+}
+```
+
+#### 6. **Break Status Classification**
+
+```typescript
+if (hasValidStartTime && hasValidEndTime) {
+  if (attendance.break_out_time && !isZeroTime(attendance.break_out_time) &&
+      attendance.break_in_time && !isZeroTime(attendance.break_in_time)) {
+    break_status = break_lateness_minutes > 0 ? 'late' : 'on_time';
+  } else {
+    break_status = 'no_break';
+  }
+} else {
+  break_status = 'no_data';
+}
+```
+
+### Edge Cases Handling
+
+1. **Shift Malam (Night Shift)**: Sistem menangani shift yang melewati tengah malam
+2. **Hari Libur**: Otomatis terdeteksi sebagai `off_day` berdasarkan jadwal
+3. **Data Tidak Lengkap**: Sistem tetap dapat menghitung statistik parsial
+4. **Zona Waktu**: Semua perhitungan menggunakan zona waktu Asia/Jakarta
+5. **Toleransi Waktu**: Sistem dapat dikonfigurasi untuk memberikan toleransi keterlambatan
+
+### Performance Optimizations
+
+- **Caching**: Hasil perhitungan di-cache untuk menghindari perhitungan ulang
+- **Batch Processing**: Perhitungan bulk menggunakan queue system
+- **Database Indexing**: Index pada field `employee_id`, `date`, dan `attendance_status`
+- **Lazy Loading**: Data statistik dihitung on-demand
+
+## 📊 Data Models & Schema
+
+### Lateness Data Model
+
+```typescript
+interface LatenessData {
+  _id?: string;
+  employee_id: string;
+  date: string; // Format: YYYY-MM-DD
+  attendance_status: 'on_time' | 'late' | 'very_late' | 'absent' | 'off_day' | 'early_departure' | 'incomplete_attendance';
+  start_lateness_minutes: number;
+  break_lateness_minutes: number;
+  end_lateness_minutes: number;
+  total_working_minutes: number;
+  break_status: 'on_time' | 'late' | 'no_break' | 'no_data';
+  schedule_shift_start: string;
+  schedule_shift_end: string;
+  schedule_break_start?: string;
+  schedule_break_end?: string;
+  actual_start_time?: string;
+  actual_end_time?: string;
+  actual_break_out_time?: string;
+  actual_break_in_time?: string;
+  created_at: Date;
+  updated_at: Date;
+}
+```
+
+### MongoDB Schema (Mongoose)
+
+```typescript
+const latenessSchema = new Schema({
+  employee_id: {
+    type: String,
+    required: true,
+    index: true
+  },
+  date: {
+    type: String,
+    required: true,
+    index: true,
+    match: /^\d{4}-\d{2}-\d{2}$/
+  },
+  attendance_status: {
+    type: String,
+    required: true,
+    enum: ['on_time', 'late', 'very_late', 'absent', 'off_day', 'early_departure', 'incomplete_attendance'],
+    index: true
+  },
+  start_lateness_minutes: {
+    type: Number,
+    required: true,
+    min: 0,
+    default: 0
+  },
+  break_lateness_minutes: {
+    type: Number,
+    required: true,
+    min: 0,
+    default: 0
+  },
+  end_lateness_minutes: {
+    type: Number,
+    required: true,
+    min: 0,
+    default: 0
+  },
+  total_working_minutes: {
+    type: Number,
+    required: true,
+    min: 0,
+    default: 0
+  },
+  break_status: {
+    type: String,
+    required: true,
+    enum: ['on_time', 'late', 'no_break', 'no_data'],
+    default: 'no_data'
+  },
+  // Schedule data (for reference)
+  schedule_shift_start: String,
+  schedule_shift_end: String,
+  schedule_break_start: String,
+  schedule_break_end: String,
+  // Actual attendance data (for reference)
+  actual_start_time: String,
+  actual_end_time: String,
+  actual_break_out_time: String,
+  actual_break_in_time: String
+}, {
+  timestamps: true,
+  collection: 'lateness'
+});
+
+// Compound indexes for better query performance
+latenessSchema.index({ employee_id: 1, date: 1 }, { unique: true });
+latenessSchema.index({ date: 1, attendance_status: 1 });
+latenessSchema.index({ employee_id: 1, attendance_status: 1 });
+latenessSchema.index({ created_at: 1 });
+```
+
+### Statistics Response Model
+
+```typescript
+interface LatenessStatistics {
+  employee_id?: string;
+  period: {
+    start_date: string;
+    end_date: string;
+    total_days: number;
+  };
+  attendance_summary: {
+    total_working_days: number;
+    on_time_days: number;
+    late_days: number;
+    very_late_days: number;
+    absent_days: number;
+    early_departure_days: number;
+    incomplete_attendance_days: number;
+    off_days: number;
+  };
+  lateness_metrics: {
+    total_start_lateness_minutes: number;
+    total_break_lateness_minutes: number;
+    total_end_lateness_minutes: number;
+    average_start_lateness_minutes: number;
+    average_break_lateness_minutes: number;
+    average_end_lateness_minutes: number;
+    max_start_lateness_minutes: number;
+    max_break_lateness_minutes: number;
+    max_end_lateness_minutes: number;
+  };
+  working_time_metrics: {
+    total_working_minutes: number;
+    average_working_minutes: number;
+    expected_working_minutes: number;
+    working_time_deficit_minutes: number;
+  };
+  break_metrics: {
+    total_break_days: number;
+    on_time_break_days: number;
+    late_break_days: number;
+    no_break_days: number;
+  };
+  performance_indicators: {
+    punctuality_rate: number; // Percentage of on-time days
+    attendance_rate: number; // Percentage of non-absent days
+    completion_rate: number; // Percentage of complete attendance records
+    discipline_score: number; // Overall discipline score (0-100)
+  };
+  trends?: {
+    weekly_average_lateness: number[];
+    monthly_punctuality_trend: number[];
+    improvement_rate: number;
+  };
+}
+```
+
+### Input Validation Rules
+
+```typescript
+// Date validation
+const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+const isValidDate = (dateString: string): boolean => {
+  if (!dateRegex.test(dateString)) return false;
+  const date = new Date(dateString);
+  return date instanceof Date && !isNaN(date.getTime());
+};
+
+// Employee ID validation
+const employeeIdRegex = /^[a-zA-Z0-9_-]+$/;
+const isValidEmployeeId = (employeeId: string): boolean => {
+  return employeeId && employeeId.length >= 3 && employeeId.length <= 50 && employeeIdRegex.test(employeeId);
+};
+
+// Time format validation
+const timeRegex = /^([01]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/;
+const isValidTimeFormat = (timeString: string): boolean => {
+  return timeRegex.test(timeString);
+};
+
+// Query parameter validation
+const validationRules = {
+  limit: { min: 1, max: 1000, default: 50 },
+  page: { min: 1, default: 1 },
+  groupBy: ['day', 'week', 'month', 'year'],
+  severity: ['late', 'very_late', 'all'],
+  priority: ['high', 'medium', 'low']
+};
+```
+
+## 🚨 Error Handling & Troubleshooting
+
+### Common Error Codes
+
+| Error Code | HTTP Status | Description | Solution |
+|------------|-------------|-------------|----------|
+| `EMPLOYEE_NOT_FOUND` | 404 | Employee ID tidak ditemukan | Verifikasi employee_id yang valid |
+| `INVALID_DATE_FORMAT` | 400 | Format tanggal tidak valid | Gunakan format YYYY-MM-DD |
+| `INVALID_DATE_RANGE` | 400 | Rentang tanggal tidak valid | Pastikan start_date <= end_date |
+| `ATTENDANCE_DATA_NOT_FOUND` | 404 | Data kehadiran tidak ditemukan | Periksa ketersediaan data attendance |
+| `SCHEDULE_DATA_NOT_FOUND` | 404 | Data jadwal tidak ditemukan | Pastikan employee memiliki schedule |
+| `DATABASE_CONNECTION_ERROR` | 500 | Koneksi database gagal | Periksa koneksi MongoDB |
+| `CALCULATION_TIMEOUT` | 408 | Perhitungan timeout | Kurangi rentang data atau coba lagi |
+| `INVALID_ENUM_VALUE` | 400 | Nilai enum tidak valid | Periksa nilai yang diizinkan |
+| `RATE_LIMIT_EXCEEDED` | 429 | Batas rate limit terlampaui | Tunggu sebelum request berikutnya |
+| `UNAUTHORIZED_ACCESS` | 401 | Token tidak valid atau expired | Login ulang atau refresh token |
+
+### Error Response Format
+
+```json
+{
+  "success": false,
+  "message": "Human readable error message",
+  "error": {
+    "code": "ERROR_CODE",
+    "details": "Detailed error information",
+    "field": "field_name", // Optional: untuk validation errors
+    "value": "invalid_value", // Optional: nilai yang menyebabkan error
+    "suggestions": [ // Optional: saran perbaikan
+      "Use format YYYY-MM-DD for dates",
+      "Check employee_id exists in database"
+    ]
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z",
+  "request_id": "req_123456789" // Optional: untuk tracking
+}
+```
+
+### Debugging Tips
+
+#### 1. **Data Validation Issues**
+```bash
+# Check if employee exists
+GET /api/employees/:employeeId
+
+# Verify date format
+echo "2025-01-15" | grep -E "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+
+# Test with minimal date range
+GET /api/lateness/calculate/range/EMP001?start_date=2025-01-15&end_date=2025-01-15
+```
+
+#### 2. **Performance Issues**
+```bash
+# Check service health
+GET /api/lateness/health
+
+# Use smaller date ranges
+GET /api/lateness/calculate/range/EMP001?start_date=2025-01-01&end_date=2025-01-07
+
+# Enable pagination
+GET /api/lateness/data/EMP001?limit=10&page=1
+```
+
+#### 3. **Database Connection Issues**
+```bash
+# Check MongoDB connection
+mongosh "mongodb+srv://your-connection-string"
+
+# Verify collections exist
+db.attendances.countDocuments()
+db.schedules.countDocuments()
+db.lateness.countDocuments()
+```
+
+### Monitoring & Logging
+
+#### Log Levels
+- **ERROR**: Critical errors yang memerlukan perhatian segera
+- **WARN**: Potensi masalah atau kondisi tidak normal
+- **INFO**: Informasi operasional normal
+- **DEBUG**: Detail untuk troubleshooting
+
+#### Key Metrics to Monitor
+```typescript
+interface LatenessServiceMetrics {
+  calculations_per_minute: number;
+  average_response_time: number;
+  error_rate: number;
+  database_connection_status: 'connected' | 'disconnected';
+  cache_hit_rate: number;
+  memory_usage: {
+    used: string;
+    available: string;
+    percentage: number;
+  };
+  active_requests: number;
+  queue_size: number;
+}
+```
+
+#### Health Check Endpoints
+```bash
+# Service health
+GET /api/lateness/health
+
+# Database connectivity
+GET /api/health/database
+
+# System metrics
+GET /api/health/metrics
+```
+
+### Performance Optimization Guidelines
+
+#### 1. **Query Optimization**
+- Gunakan pagination untuk dataset besar
+- Batasi rentang tanggal maksimal 1 tahun
+- Manfaatkan index database yang tersedia
+- Cache hasil perhitungan yang sering diakses
+
+#### 2. **Memory Management**
+- Proses data dalam batch untuk dataset besar
+- Implementasi streaming untuk export data
+- Monitor memory usage secara berkala
+- Cleanup cache secara otomatis
+
+#### 3. **Database Optimization**
+```javascript
+// Recommended indexes
+db.lateness.createIndex({ "employee_id": 1, "date": 1 }, { unique: true })
+db.lateness.createIndex({ "date": 1, "attendance_status": 1 })
+db.lateness.createIndex({ "employee_id": 1, "attendance_status": 1 })
+db.lateness.createIndex({ "created_at": 1 })
+
+// Query optimization
+db.lateness.find({ 
+  "employee_id": "EMP001", 
+  "date": { $gte: "2025-01-01", $lte: "2025-01-31" } 
+}).hint({ "employee_id": 1, "date": 1 })
+```
+
+### Backup & Recovery
+
+#### Data Backup Strategy
+```bash
+# Daily backup of lateness collection
+mongodump --collection=lateness --db=your_database --out=/backup/$(date +%Y%m%d)
+
+# Restore from backup
+mongorestore --collection=lateness --db=your_database /backup/20250115/your_database/lateness.bson
+```
+
+#### Recovery Procedures
+1. **Data Corruption**: Restore dari backup terakhir
+2. **Calculation Errors**: Re-run bulk calculation untuk periode tertentu
+3. **Performance Degradation**: Clear cache dan restart service
+4. **Database Issues**: Failover ke replica set
 
 ### Rate Limiting
 The API implements rate limiting to prevent abuse and ensure fair usage:
