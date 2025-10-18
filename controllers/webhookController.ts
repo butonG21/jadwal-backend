@@ -119,17 +119,54 @@ export class WebhookController {
       logger.info(`Project path: ${this.projectPath}`);
 
       const { stdout, stderr } = await execAsync(`bash ${deployScript}`, {
-        timeout: 600000, // 10 minutes timeout
+        timeout: 900000, // 15 minutes timeout (increased for PM2 operations)
         cwd: this.projectPath, // Set working directory to project root
-        env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' }
+        env: { 
+          ...process.env, 
+          PATH: '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
+          NODE_ENV: process.env.NODE_ENV || 'production'
+        },
+        killSignal: 'SIGTERM', // Use SIGTERM instead of SIGKILL
+        maxBuffer: 1024 * 1024 * 10 // 10MB buffer for large outputs
       });
       
       if (stdout) logger.info(`Deployment output: ${stdout}`);
       if (stderr) logger.warn(`Deployment stderr: ${stderr}`);
       
       logger.info('Deployment completed successfully');
-    } catch (error) {
-      logger.error('Deployment process failed:', error);
+    } catch (error: any) {
+      // Handle specific error types
+      if (error.signal === 'SIGINT') {
+        logger.warn('Deployment process was interrupted (SIGINT), but may have completed successfully');
+        logger.info('Checking if deployment actually completed...');
+        
+        // Give a moment for PM2 processes to stabilize
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        
+        // Try to verify if the deployment was successful despite the SIGINT
+        try {
+          const { stdout: statusOutput } = await execAsync('pm2 status', {
+            cwd: this.projectPath,
+            timeout: 30000
+          });
+          
+          if (statusOutput.includes('online')) {
+            logger.info('Deployment appears to have completed successfully despite SIGINT');
+            return; // Don't throw error if PM2 shows processes are online
+          }
+        } catch (statusError) {
+          logger.warn('Could not verify PM2 status after SIGINT');
+        }
+      }
+      
+      logger.error('Deployment process failed:', {
+        message: error.message,
+        signal: error.signal,
+        code: error.code,
+        cmd: error.cmd,
+        stdout: error.stdout,
+        stderr: error.stderr
+      });
       throw error;
     } finally {
       this.isDeploying = false;

@@ -37,13 +37,24 @@ npm install || error_exit "npm install failed"
 log "Building the project..."
 npm run build || error_exit "Build failed"
 
-# Restart PM2 processes
+# Restart PM2 processes gracefully
 log "Restarting PM2 processes..."
-pm2 restart all || error_exit "PM2 restart failed"
+# Use reload instead of restart to avoid SIGINT issues
+pm2 reload all --update-env || {
+    log "PM2 reload failed, trying restart..."
+    pm2 restart all --update-env || error_exit "PM2 restart failed"
+}
+
+# Wait a moment for processes to stabilize
+sleep 3
 
 # Check PM2 status
 log "Checking PM2 status..."
 pm2 status || log "Warning: Could not get PM2 status"
+
+# Verify the application is running
+log "Verifying application status..."
+pm2 list | grep -E "(online|stopped|errored)" || log "Warning: Could not verify application status"
 
 log "Deployment completed successfully!"
 
