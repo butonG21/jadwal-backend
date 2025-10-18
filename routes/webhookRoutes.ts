@@ -27,12 +27,15 @@ const githubWebhookMiddleware = (req: express.Request, res: express.Response, ne
 };
 
 // GitHub webhook endpoint
-router.post('/github', githubWebhookMiddleware, (req, res) => webhookController.handleGitHubWebhook(req, res));
+router.post('/github', githubWebhookMiddleware, webhookController.handleGitHubWebhook.bind(webhookController));
 
 // Manual deployment endpoint (for testing/admin use)
-router.post('/deploy', (req, res) => webhookController.manualDeploy(req, res));
+router.post('/deploy', webhookController.manualDeploy.bind(webhookController));
 
 // Get deployment status
-router.get('/status', (req, res) => webhookController.getDeploymentStatus(req, res));
+router.get('/status', webhookController.getDeploymentStatus.bind(webhookController));
+
+// Reset deployment status
+router.post('/reset', webhookController.resetDeploymentStatus.bind(webhookController));
 
 export default router;

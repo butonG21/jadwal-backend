@@ -48,7 +48,7 @@ export class WebhookController {
       const branch = payload.ref?.split('/').pop();
       
       // Add debug logging
-      logger.info(`Webhook received - ref: ${payload.ref}, extracted branch: ${branch}`);
+      logger.info(`Webhook received - extracted branch: ${branch}`);
       
       if (branch !== 'master' && branch !== 'main') {
         logger.info(`Branch '${branch}' is not master/main, ignoring push`);
@@ -94,15 +94,25 @@ export class WebhookController {
   }
 
   private async startDeploymentProcess(payload: any): Promise<void> {
-    if (this.isDeploying) {
-      logger.warn('Deployment already in progress');
-      return;
-    }
-
-    this.isDeploying = true;
     logger.info('Starting deployment process...');
 
     try {
+      // Check if we're in development environment (Windows)
+      const isWindows = process.platform === 'win32';
+      const isDevelopment = process.env.NODE_ENV === 'development';
+      
+      if (isWindows || isDevelopment) {
+        logger.info('Development environment detected - skipping actual deployment');
+        logger.info('In production, this would execute the deployment script on Linux VPS');
+        logger.info(`Payload received: ${JSON.stringify(payload, null, 2)}`);
+        
+        // Simulate deployment delay
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        logger.info('Simulated deployment completed successfully');
+        return;
+      }
+
+      // Production deployment (Linux VPS)
       const deployScript = `${this.projectPath}/scripts/deploy.sh`;
       
       logger.info(`Executing deployment script: ${deployScript}`);
@@ -137,6 +147,21 @@ export class WebhookController {
     } catch (error) {
       logger.error('Error getting deployment status:', error);
       res.status(500).json(ApiResponse.error('Failed to get deployment status'));
+    }
+  }
+
+  async resetDeploymentStatus(req: Request, res: Response): Promise<void> {
+    try {
+      this.isDeploying = false;
+      logger.info('Deployment status reset manually');
+      
+      res.status(200).json(ApiResponse.success('Deployment status reset successfully', {
+        isDeploying: this.isDeploying,
+        timestamp: new Date().toISOString()
+      }));
+    } catch (error) {
+      logger.error('Error resetting deployment status:', error);
+      res.status(500).json(ApiResponse.error('Failed to reset deployment status'));
     }
   }
 
