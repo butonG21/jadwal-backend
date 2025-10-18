@@ -30,7 +30,11 @@ export class WebhookController {
       const payload = req.body;
       const branch = payload.ref?.split('/').pop();
       
+      // Add debug logging
+      logger.info(`Webhook received - ref: ${payload.ref}, extracted branch: ${branch}`);
+      
       if (branch !== 'master' && branch !== 'main') {
+        logger.info(`Branch '${branch}' is not master/main, ignoring push`);
         res.status(200).json(ApiResponse.success('Push ignored - not master/main branch'));
         return;
       }
@@ -73,12 +77,12 @@ export class WebhookController {
   }
 
   private async startDeploymentProcess(payload: any): Promise<void> {
-    if (webhookController.isDeploying) {
+    if (this.isDeploying) {
       logger.warn('Deployment already in progress');
       return;
     }
 
-    webhookController.isDeploying = true;
+    this.isDeploying = true;
     logger.info('Starting deployment process...');
 
     try {
@@ -99,7 +103,7 @@ export class WebhookController {
       logger.error('Deployment process failed:', error);
       throw error;
     } finally {
-      webhookController.isDeploying = false;
+      this.isDeploying = false;
     }
   }
 
