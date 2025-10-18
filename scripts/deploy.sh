@@ -5,7 +5,7 @@
 
 set -e  # Exit on any error
 
-PROJECT_PATH="/shiftly/jadwal-backend"
+PROJECT_PATH="~/shiftly/jadwal-backend"
 LOG_FILE="/var/log/jadwal-deployment.log"
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
