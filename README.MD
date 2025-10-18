@@ -1,4 +1,4 @@
-# Jadwal Backend API - Enhanced Version 2.0
+# Jadwal Backend API - Enhanced Version 2.0.1
 
 A robust, scalable Node.js/Express backend API for employee scheduling and attendance management with comprehensive error handling, security features, and modern architecture patterns.
 
