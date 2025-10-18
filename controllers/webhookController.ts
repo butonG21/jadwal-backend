@@ -73,38 +73,33 @@ export class WebhookController {
   }
 
   private async startDeploymentProcess(payload: any): Promise<void> {
+    if (webhookController.isDeploying) {
+      logger.warn('Deployment already in progress');
+      return;
+    }
+
+    webhookController.isDeploying = true;
+    logger.info('Starting deployment process...');
+
     try {
-      logger.info('Starting deployment process...');
-      
-      // Execute deployment script
       const deployScript = `${this.projectPath}/scripts/deploy.sh`;
       
       logger.info(`Executing deployment script: ${deployScript}`);
+
+      const { stdout, stderr } = await execAsync(`bash ${deployScript}`, {
+        timeout: 600000, // 10 minutes timeout
+        env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' }
+      });
       
-      try {
-        const { stdout, stderr } = await execAsync(`bash ${deployScript}`, {
-          timeout: 600000, // 10 minutes timeout
-          env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' }
-        });
-        
-        if (stdout) logger.info(`Deployment output: ${stdout}`);
-        if (stderr) logger.warn(`Deployment stderr: ${stderr}`);
-        
-        logger.info('Deployment completed successfully');
-        
-      } catch (error) {
-        logger.error('Deployment script failed:', error);
-        throw new Error(`Deployment script failed: ${error}`);
-      }
+      if (stdout) logger.info(`Deployment output: ${stdout}`);
+      if (stderr) logger.warn(`Deployment stderr: ${stderr}`);
       
-      this.isDeploying = false;
-      
+      logger.info('Deployment completed successfully');
     } catch (error) {
       logger.error('Deployment process failed:', error);
-      this.isDeploying = false;
-      
-      // You might want to send a notification here (email, Slack, etc.)
-      // this.sendDeploymentFailureNotification(error);
+      throw error;
+    } finally {
+      webhookController.isDeploying = false;
     }
   }
 
