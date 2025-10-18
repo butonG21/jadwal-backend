@@ -15,6 +15,7 @@ import userRoutes from './routes/userRoute';
 import authRoutes from './routes/authRoutes';
 import attendanceRoutes from './routes/attendance';
 import cronRoutes from './routes/cronRoutes';
+import webhookRoutes from './routes/webhookRoutes';
 
 // Services
 import { cronService } from './services/cronService';
@@ -155,6 +156,9 @@ class Application {
     this.app.use('/api/users', userRoutes);
     this.app.use('/api/auth', authRoutes);
     this.app.use('/api/attendance', attendanceRoutes);
+
+    // Webhook routes - these should be added before other routes
+    this.app.use('/webhook', webhookRoutes);
 
     // Root endpoint with API documentation
     this.app.get('/', this.rootEndpoint.bind(this));
