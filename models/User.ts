@@ -1,11 +1,18 @@
 // models/User.ts (Updated with profile image fields)
 import mongoose, { Document, Schema } from 'mongoose';
 
+// Role enum for type safety
+export enum UserRole {
+  USER = 'user',
+  ADMIN = 'admin'
+}
+
 interface IUser extends Document {
   uid: string;
   name: string;
   email?: string;
   location?: string;
+  role: UserRole;
   
   // Profile Image Fields
   profileImage?: string;
@@ -18,6 +25,10 @@ interface IUser extends Document {
   createdAt: Date;
   updatedAt: Date;
   lastLoginAt?: Date;
+  
+  // Role-related methods
+  isAdmin(): boolean;
+  hasRole(role: UserRole): boolean;
 }
 
 const userSchema = new Schema<IUser>({
@@ -44,6 +55,13 @@ const userSchema = new Schema<IUser>({
     type: String,
     trim: true,
     maxlength: 100
+  },
+  role: {
+    type: String,
+    enum: Object.values(UserRole),
+    default: UserRole.USER,
+    required: true,
+    index: true
   },
   
   // Profile Image Fields
@@ -105,6 +123,7 @@ userSchema.index({ uid: 1 });
 userSchema.index({ email: 1 });
 userSchema.index({ createdAt: -1 });
 userSchema.index({ profileImageFileId: 1 });
+userSchema.index({ role: 1 });
 
 // Pre-save middleware to update updatedAt
 userSchema.pre('save', function(next) {
@@ -133,6 +152,15 @@ userSchema.virtual('profileImageVariants').get(function() {
   };
 });
 
+// Role-related instance methods
+userSchema.methods.isAdmin = function(): boolean {
+  return this.role === UserRole.ADMIN;
+};
+
+userSchema.methods.hasRole = function(role: UserRole): boolean {
+  return this.role === role;
+};
+
 // Method to get full profile data including image variants
 userSchema.methods.getFullProfile = function() {
   return {
@@ -140,6 +168,7 @@ userSchema.methods.getFullProfile = function() {
     name: this.name,
     email: this.email,
     location: this.location,
+    role: this.role,
     profileImage: {
       original: this.profileImage,
       thumbnail: this.profileImageThumbnail,
@@ -167,6 +196,19 @@ userSchema.statics.getOrphanedProfileImages = function() {
     profileImageFileId: { $exists: true, $ne: null },
     profileImage: null
   });
+};
+
+// Role-related static methods
+userSchema.statics.findAdmins = function() {
+  return this.find({ role: UserRole.ADMIN });
+};
+
+userSchema.statics.findByRole = function(role: UserRole) {
+  return this.find({ role });
+};
+
+userSchema.statics.countByRole = function(role: UserRole) {
+  return this.countDocuments({ role });
 };
 
 // Transform output for JSON

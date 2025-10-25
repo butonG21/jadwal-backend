@@ -3,18 +3,20 @@ import { jwtService } from '../utils/jwt';
 import { logger } from '../utils/loggers';
 import { ApiResponse } from '../utils/apiResponse';
 import { UnauthorizedError } from '../utils/errorTypes';
+import User, { UserRole } from '../models/User';
 
 export interface AuthenticatedRequest extends Request {
   user?: {
     uid: string;
     name: string;
     email?: string;
+    role: UserRole;
     iat: number;
     exp: number;
   };
 }
 
-export const verifyTokenMiddleware = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+export const verifyTokenMiddleware = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
   const requestId = (req as any).requestId;
 
@@ -58,12 +60,25 @@ export const verifyTokenMiddleware = (req: AuthenticatedRequest, res: Response, 
     // Verify token
     const decoded = jwtService.verifyToken(token);
     
-    // Add user info to request object
-    req.user = decoded;
+    // Fetch user from database to get current role
+    const user = await User.findOne({ uid: decoded.uid }).select('role');
+    if (!user) {
+      logger.warn('User not found in database', { uid: decoded.uid, requestId });
+      return res.status(401).json(
+        ApiResponse.error('User not found', 'USER_NOT_FOUND', 401)
+      );
+    }
+    
+    // Add user info to request object including role
+    req.user = {
+      ...decoded,
+      role: user.role
+    };
     
     // Log successful token verification (debug level)
     logger.debug('Token verified successfully', { 
       uid: decoded.uid, 
+      role: user.role,
       requestId,
       expiresAt: new Date(decoded.exp * 1000).toISOString()
     });
@@ -89,87 +104,118 @@ export const verifyTokenMiddleware = (req: AuthenticatedRequest, res: Response, 
   }
 };
 
-// Optional middleware - doesn't fail if no token provided
-export const optionalAuthMiddleware = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  const authHeader = req.headers.authorization;
+// Optional auth middleware - doesn't fail if no token provided
+export const optionalAuthMiddleware = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  const requestId = req.headers['x-request-id'] as string || 'unknown';
   
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    // No token provided, continue without authentication
-    return next();
-  }
-
-  const token = authHeader.split(' ')[1];
-  
-  if (!token) {
-    return next();
-  }
-
   try {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      // No token provided, continue without user info
+      return next();
+    }
+    
+    const token = authHeader.substring(7);
     const decoded = jwtService.verifyToken(token);
-    req.user = decoded;
     
-    logger.debug('Optional auth successful', { 
-      uid: decoded.uid, 
-      requestId: (req as any).requestId 
-    });
+    // Fetch user from database to get current role
+    const user = await User.findOne({ uid: decoded.uid }).select('role');
+    if (user) {
+      req.user = {
+        ...decoded,
+        role: user.role
+      };
+    }
     
+    next();
   } catch (error) {
-    // Token is invalid, but we don't fail the request
-    logger.debug('Optional auth failed, continuing without authentication', { 
-      requestId: (req as any).requestId,
-      error: error instanceof Error ? error.message : 'Unknown error'
+    // Token invalid, continue without user info
+    logger.debug('Optional auth failed, continuing without user', { requestId, error: error instanceof Error ? error.message : String(error) });
+    next();
+  }
+};
+
+// Role-based authorization middleware
+export const requireRole = (...allowedRoles: UserRole[]) => {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    const requestId = req.headers['x-request-id'] as string || 'unknown';
+    
+    if (!req.user) {
+      logger.warn('Role check failed: No authenticated user', { requestId });
+      return res.status(401).json(
+        ApiResponse.error('Authentication required', 'AUTHENTICATION_REQUIRED', 401)
+      );
+    }
+    
+    if (!allowedRoles.includes(req.user.role)) {
+      logger.warn('Role check failed: Insufficient permissions', { 
+        uid: req.user.uid, 
+        userRole: req.user.role, 
+        requiredRoles: allowedRoles,
+        requestId 
+      });
+      return res.status(403).json(
+        ApiResponse.error('Insufficient permissions', 'INSUFFICIENT_PERMISSIONS', 403)
+      );
+    }
+    
+    logger.debug('Role check passed', { 
+      uid: req.user.uid, 
+      userRole: req.user.role, 
+      requestId 
     });
+    
+    next();
+  };
+};
+
+// Admin-only middleware
+export const requireAdmin = requireRole(UserRole.ADMIN);
+
+// Ownership verification middleware
+export const requireOwnership = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  const requestId = req.headers['x-request-id'] as string || 'unknown';
+  
+  if (!req.user) {
+    logger.warn('Ownership check failed: No authenticated user', { requestId });
+    return res.status(401).json(
+      ApiResponse.error('Authentication required', 'AUTHENTICATION_REQUIRED', 401)
+    );
   }
   
-  next();
-};
-
-// Middleware to check specific roles (for future use)
-export const requireRole = (roles: string[]) => {
-  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-    if (!req.user) {
-      return res.status(401).json(
-        ApiResponse.error('Authentication required', 'UNAUTHENTICATED', 401)
-      );
-    }
-
-    // For now, we don't have roles in the token
-    // This is a placeholder for future role-based access control
-    logger.warn('Role check requested but not implemented', { 
+  // Check if user is admin (admins can access any resource)
+  if (req.user.role === UserRole.ADMIN) {
+    logger.debug('Ownership check passed: Admin access', { uid: req.user.uid, requestId });
+    return next();
+  }
+  
+  // Check if the requested resource belongs to the user
+  const resourceUserId = req.params.uid || req.params.userId || req.body.uid;
+  
+  if (!resourceUserId) {
+    logger.warn('Ownership check failed: No resource user ID found', { 
       uid: req.user.uid, 
-      requiredRoles: roles 
+      requestId 
     });
-    
-    next();
-  };
-};
-
-// Middleware to check if user owns the resource
-export const requireOwnership = (userIdParam: string = 'employeeId') => {
-  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-    if (!req.user) {
-      return res.status(401).json(
-        ApiResponse.error('Authentication required', 'UNAUTHENTICATED', 401)
-      );
-    }
-
-    const resourceUserId = req.params[userIdParam];
-    const currentUserId = req.user.uid;
-
-    if (resourceUserId !== currentUserId) {
-      logger.warn('Ownership check failed', {
-        currentUser: currentUserId,
-        resourceUser: resourceUserId,
-        requestId: (req as any).requestId
-      });
-      
-      return res.status(403).json(
-        ApiResponse.error('Access denied. You can only access your own data.', 'ACCESS_DENIED', 403)
-      );
-    }
-
-    next();
-  };
+    return res.status(400).json(
+      ApiResponse.error('Resource user ID required', 'RESOURCE_USER_ID_REQUIRED', 400)
+    );
+  }
+  
+  if (req.user.uid !== resourceUserId) {
+    logger.warn('Ownership check failed: Resource does not belong to user', { 
+      uid: req.user.uid, 
+      resourceUserId, 
+      requestId 
+    });
+    return res.status(403).json(
+      ApiResponse.error('Access denied: Resource does not belong to you', 'ACCESS_DENIED', 403)
+    );
+  }
+  
+  logger.debug('Ownership check passed', { uid: req.user.uid, requestId });
+  next();
 };
 
 // Export the main middleware with backward compatibility

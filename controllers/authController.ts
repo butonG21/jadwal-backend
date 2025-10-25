@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import axios from 'axios';
 import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
-import User from '../models/User';
+import User, { UserRole } from '../models/User';
 import { logger } from '../utils/loggers';
 import { ApiResponse } from '../utils/apiResponse';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -32,6 +32,7 @@ interface AuthenticatedRequest extends Request {
     uid: string;
     name: string;
     email?: string;
+    role: UserRole;
     iat: number;
     exp: number;
   };
@@ -207,7 +208,8 @@ class AuthController {
       const tokenPayload = {
         uid: user.uid,
         name: user.name,
-        email: user.email
+        email: user.email,
+        role: user.role
       };
 
       const token = generateToken(tokenPayload);
@@ -219,7 +221,8 @@ class AuthController {
           uid: user.uid,
           name: user.name,
           email: user.email || null,
-          location: user.location || null
+          location: user.location || null,
+          role: user.role
         },
         expiresIn: process.env.JWT_EXPIRES_IN || '7d'
       };

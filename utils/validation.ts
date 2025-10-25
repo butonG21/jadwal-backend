@@ -42,16 +42,62 @@ export const validationSchemas = {
   })
 };
 
-export function validateRequest(schema: Joi.ObjectSchema) {
+export function validateRequest(schema: Joi.ObjectSchema | { body?: Joi.ObjectSchema, params?: Joi.ObjectSchema, query?: Joi.ObjectSchema }) {
   return (req: any, res: any, next: any) => {
-    const { error, value } = schema.validate({
-      ...req.body,
-      ...req.query,
-      ...req.params
-    }, {
-      abortEarly: false,
-      stripUnknown: true
-    });
+    let error: Joi.ValidationError | undefined;
+    
+    // If schema is a simple ObjectSchema, validate all together
+    if ('validate' in schema && typeof schema.validate === 'function') {
+      const result = (schema as Joi.ObjectSchema).validate({
+        ...req.body,
+        ...req.query,
+        ...req.params
+      }, {
+        abortEarly: false,
+        stripUnknown: true
+      });
+      error = result.error;
+      if (!error) {
+        Object.assign(req.body, result.value);
+        Object.assign(req.query, result.value);
+        Object.assign(req.params, result.value);
+      }
+    } else {
+      // If schema is an object with body/params/query, validate separately
+      const schemaObj = schema as { body?: Joi.ObjectSchema, params?: Joi.ObjectSchema, query?: Joi.ObjectSchema };
+      const errors: Joi.ValidationErrorItem[] = [];
+      
+      if (schemaObj.body) {
+        const result = schemaObj.body.validate(req.body, { abortEarly: false, stripUnknown: true });
+        if (result.error) {
+          errors.push(...result.error.details);
+        } else {
+          Object.assign(req.body, result.value);
+        }
+      }
+      
+      if (schemaObj.params) {
+        const result = schemaObj.params.validate(req.params, { abortEarly: false, stripUnknown: true });
+        if (result.error) {
+          errors.push(...result.error.details);
+        } else {
+          Object.assign(req.params, result.value);
+        }
+      }
+      
+      if (schemaObj.query) {
+        const result = schemaObj.query.validate(req.query, { abortEarly: false, stripUnknown: true });
+        if (result.error) {
+          errors.push(...result.error.details);
+        } else {
+          Object.assign(req.query, result.value);
+        }
+      }
+      
+      if (errors.length > 0) {
+        error = new Joi.ValidationError('Validation failed', errors, {});
+      }
+    }
 
     if (error) {
       const errorDetails = error.details.map(detail => ({
@@ -69,11 +115,6 @@ export function validateRequest(schema: Joi.ObjectSchema) {
         )
       );
     }
-
-    // Replace req properties with validated values
-    Object.assign(req.body, value);
-    Object.assign(req.query, value);
-    Object.assign(req.params, value);
 
     next();
   };

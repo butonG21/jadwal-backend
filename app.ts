@@ -17,6 +17,7 @@ import attendanceRoutes from './routes/attendance';
 import cronRoutes from './routes/cronRoutes';
 import latenessRoutes from './routes/lateness';
 import webhookRoutes from './routes/webhookRoutes';
+import adminRoutes from './routes/adminRoutes';
 
 // Services
 import { cronService } from './services/cronService';
@@ -152,6 +153,7 @@ class Application {
     this.app.use(`${apiV1}/attendance`, attendanceRoutes);
     this.app.use(`${apiV1}/cron`, cronRoutes);
     this.app.use(`${apiV1}/lateness`, latenessRoutes);
+    this.app.use(`${apiV1}/admin`, adminRoutes);
 
     // Backward compatibility - keep old routes
     this.app.use('/api/schedule', scheduleRoutes);
@@ -159,6 +161,7 @@ class Application {
     this.app.use('/api/auth', authRoutes);
     this.app.use('/api/attendance', attendanceRoutes);
     this.app.use('/api/lateness', latenessRoutes);
+    this.app.use('/api/admin', adminRoutes);
 
     // Webhook routes - these should be added before other routes
     this.app.use('/webhook', webhookRoutes);

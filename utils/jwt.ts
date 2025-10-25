@@ -2,11 +2,13 @@ import jwt from 'jsonwebtoken';
 import ms from 'ms';
 import { logger } from './loggers';
 import { AppError, UnauthorizedError } from './errorTypes';
+import { UserRole } from '../models/User';
 
 interface TokenPayload {
   uid: string;
   name: string;
   email?: string;
+  role: UserRole;
 }
 
 interface DecodedToken extends TokenPayload {
@@ -132,7 +134,8 @@ class JWTService {
       const newToken = this.generateToken({
         uid: decoded.uid,
         name: decoded.name,
-        email: decoded.email
+        email: decoded.email,
+        role: decoded.role
       });
 
       logger.info('Token refreshed successfully', { uid: decoded.uid });
