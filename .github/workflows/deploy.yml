@@ -20,7 +20,7 @@ jobs:
           ssh -o StrictHostKeyChecking=no ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} "
             cd ${{ secrets.VPS_PATH }} &&
             echo '📦 Pulling latest changes...' &&
-            git pull origin main &&
+            git pull origin master &&
             echo '🔧 Installing dependencies...' &&
             npm install &&
             echo '🧱 Building project...' &&
