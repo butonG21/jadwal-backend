@@ -26,6 +26,7 @@ interface ScheduleModel extends Model<ISchedule, {}, IScheduleMethods> {
   findByEmployeeId(employeeId: string): Promise<ISchedule | null>;
   findActiveSchedules(): Promise<ISchedule[]>;
   searchByName(name: string): Promise<ISchedule[]>;
+  findUserIdsWithSchedulesForMonth(month: number, year: number): Promise<string[]>;
 }
 
 const ScheduleItemSchema = new Schema<IScheduleItem>({
@@ -159,6 +160,38 @@ ScheduleSchema.statics.searchByName = function(name: string) {
     name: new RegExp(name, 'i'),
     isActive: true
   }).sort({ name: 1 });
+};
+
+ScheduleSchema.statics.findUserIdsWithSchedulesForMonth = function(month: number, year: number) {
+  const startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
+  const endDate = `${year}-${month.toString().padStart(2, '0')}-31`;
+  
+  return this.aggregate([
+    {
+      $match: {
+        isActive: true,
+        'schedule.date': {
+          $gte: startDate,
+          $lte: endDate
+        }
+      }
+    },
+    {
+      $group: {
+        _id: '$employee_id'
+      }
+    },
+    {
+      $match: {
+        _id: { $exists: true, $ne: null }
+      }
+    },
+    {
+      $project: {
+        employee_id: '$_id'
+      }
+    }
+  ]).then(results => results.map(r => r.employee_id));
 };
 
 // Indexes

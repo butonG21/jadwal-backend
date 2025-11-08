@@ -8,6 +8,7 @@ import {
   getLateEmployees
 } from '../controllers/latenessController';
 import { verifyToken } from '../middlewares/verifyToken';
+import { DateHelper } from '../utils/dateHelper';
 
 const router = Router();
 
@@ -83,13 +84,17 @@ router.get('/late-employees', getLateEmployees);
 // Endpoint untuk bulk calculation (admin only)
 /**
  * @route POST /api/lateness/calculate/bulk
- * @desc Hitung keterlambatan untuk multiple karyawan (admin only)
+ * @desc Hitung keterlambatan untuk multiple karyawan (admin only).
+ *       Bisa berdasarkan daftar employeeId, bulan/tahun, atau periode 'today'.
  * @access Private (Admin)
  * @body {
- *   employeeIds: string[],
- *   date?: string,
- *   startDate?: string,
- *   endDate?: string,
+ *   period?: 'today', // Opsi baru untuk menghitung semua yang terjadwal hari ini
+ *   employeeIds?: string[], // Opsi 1: Daftar ID karyawan manual
+ *   month?: number, // Opsi 2: Bulan (1-12) untuk mengambil semua user dengan jadwal
+ *   year?: number,  // Opsi 2: Tahun (2020-2030)
+ *   date?: string, // Opsional: Untuk digunakan dengan employeeIds
+ *   startDate?: string, // Opsional: Untuk digunakan dengan employeeIds
+ *   endDate?: string,   // Opsional: Untuk digunakan dengan employeeIds
  *   saveToDb?: boolean
  * }
  */
@@ -104,20 +109,54 @@ router.post('/calculate/bulk', async (req, res, next) => {
       });
     }
     
-    const { employeeIds, date, startDate, endDate, saveToDb = false } = req.body;
+    const { employeeIds, date, startDate, endDate, month, year, period, saveToDb = false } = req.body;
     
-    if (!employeeIds || !Array.isArray(employeeIds) || employeeIds.length === 0) {
+    let targetEmployeeIds: string[] = [];
+    let calculationDate: string | undefined = date;
+    let source: string = 'manual_selection';
+
+    const Schedule = (await import('../models/schedule')).default;
+
+    if (period === 'today') {
+      calculationDate = DateHelper.getCurrentDateIndonesia();
+      const today = new Date(calculationDate);
+      targetEmployeeIds = await Schedule.findUserIdsWithSchedulesForMonth(today.getMonth() + 1, today.getFullYear());
+      source = `today_auto_discovery (${calculationDate})`;
+      
+      if (targetEmployeeIds.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No employees found with active schedules for today'
+        });
+      }
+    } else if (month && year && !employeeIds) {
+      targetEmployeeIds = await Schedule.findUserIdsWithSchedulesForMonth(month, year);
+      source = `month_based_auto_discovery (${month}/${year})`;
+      
+      if (targetEmployeeIds.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No employees found with schedules for the specified month'
+        });
+      }
+    } else if (employeeIds && Array.isArray(employeeIds) && employeeIds.length > 0) {
+      targetEmployeeIds = employeeIds;
+      source = 'manual_selection';
+    } else {
       return res.status(400).json({
         success: false,
-        message: 'Employee IDs array is required'
+        message: "Invalid parameters. Provide 'period: \"today\"', or 'month' and 'year', or a list of 'employeeIds'."
       });
     }
     
-    // Limit bulk processing to 50 employees at once
-    if (employeeIds.length > 50) {
+    // Limit bulk processing untuk menghindari overload
+    const MAX_BULK_PROCESSING = 200;
+    if (targetEmployeeIds.length > MAX_BULK_PROCESSING) {
       return res.status(400).json({
         success: false,
-        message: 'Maximum 50 employees allowed per bulk request'
+        message: `Maximum ${MAX_BULK_PROCESSING} employees allowed per bulk request`,
+        totalEmployees: targetEmployeeIds.length,
+        suggestion: 'Please process in smaller batches or use month-based filtering'
       });
     }
     
@@ -125,50 +164,84 @@ router.post('/calculate/bulk', async (req, res, next) => {
     const results: any[] = [];
     const errors: any[] = [];
     
-    for (const employeeId of employeeIds) {
-      try {
-        let latenessData;
-        
-        if (date) {
-          // Single date calculation
-          latenessData = await latenessService.calculateLatenessForUser(employeeId, date);
-          if (latenessData && saveToDb) {
-            await latenessService.saveLatenessData(latenessData);
-          }
-        } else if (startDate && endDate) {
-          // Date range calculation
-          latenessData = await latenessService.calculateLatenessForDateRange(employeeId, startDate, endDate);
-          if (saveToDb) {
-            for (const data of latenessData) {
-              await latenessService.saveLatenessData(data);
+    // Process employees dengan batasan concurrency untuk menghindari overload
+    const CONCURRENCY_LIMIT = 10;
+    const processBatch = async (batch: string[]) => {
+      const batchResults: Array<{ employeeId: string; success: boolean; data: any }> = [];
+      const batchErrors: Array<{ employeeId: string; success: boolean; error: string }> = [];
+      
+      for (const employeeId of batch) {
+        try {
+          let latenessData;
+          const targetDate = calculationDate || startDate;
+
+          if (targetDate && !endDate) {
+            // Single date calculation (termasuk untuk period: 'today')
+            latenessData = await latenessService.calculateLatenessForUser(employeeId, targetDate);
+            if (latenessData && saveToDb) {
+              await latenessService.saveLatenessData(latenessData);
             }
+          } else if (startDate && endDate) {
+            // Date range calculation
+            latenessData = await latenessService.calculateLatenessForDateRange(employeeId, startDate, endDate);
+            if (saveToDb) {
+              for (const data of latenessData) {
+                await latenessService.saveLatenessData(data);
+              }
+            }
+          } else if (month && year) {
+            // Month-based calculation
+            latenessData = await latenessService.calculateLatenessForMonth(employeeId, month, year);
+            if (saveToDb) {
+              for (const data of latenessData) {
+                await latenessService.saveLatenessData(data);
+              }
+            }
+          } else {
+            throw new Error('No valid period (date, date range, or month) was specified for calculation.');
           }
-        } else {
-          throw new Error('Either date or startDate+endDate must be provided');
+          
+          batchResults.push({
+            employeeId,
+            success: true,
+            data: latenessData
+          });
+          
+        } catch (error: any) {
+          batchErrors.push({
+            employeeId,
+            success: false,
+            error: error.message
+          });
         }
-        
-        results.push({
-          employeeId,
-          success: true,
-          data: latenessData
-        });
-        
-      } catch (error: any) {
-        errors.push({
-          employeeId,
-          success: false,
-          error: error.message
-        });
       }
+      
+      return { batchResults, batchErrors };
+    };
+    
+    // Process dalam batch untuk menghindari overload
+    for (let i = 0; i < targetEmployeeIds.length; i += CONCURRENCY_LIMIT) {
+      const batch = targetEmployeeIds.slice(i, i + CONCURRENCY_LIMIT);
+      const { batchResults, batchErrors } = await processBatch(batch);
+      results.push(...batchResults);
+      errors.push(...batchErrors);
     }
     
     res.status(200).json({
       success: true,
       message: 'Bulk lateness calculation completed',
       data: {
-        processed: employeeIds.length,
+        processed: targetEmployeeIds.length,
         successful: results.length,
         failed: errors.length,
+        source,
+        period: {
+          date: calculationDate,
+          startDate,
+          endDate,
+          month,
+          year
+        },
         results,
         errors
       }
